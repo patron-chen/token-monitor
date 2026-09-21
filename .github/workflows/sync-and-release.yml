@@ -1,0 +1,205 @@
+name: Sync Upstream & Release
+
+on:
+  schedule:
+    # 每天每 6 小时自动检测一次 upstream 更新 (UTC 00:00, 06:00, 12:00, 18:00)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: '即使 upstream 没有新提交，也强制重新构建发布 Release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync Upstream (Rebase)
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check_and_sync.outputs.should_release }}
+      release_tag: ${{ steps.check_and_sync.outputs.release_tag }}
+      release_title: ${{ steps.check_and_sync.outputs.release_title }}
+    steps:
+      - name: Checkout Fork Repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git User
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+
+      - name: Add and Fetch Upstream
+        run: |
+          git remote add upstream https://github.com/Javis603/token-monitor.git || true
+          git fetch upstream main --tags
+
+      - name: Check Upstream Changes & Rebase
+        id: check_and_sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git checkout main
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+          FORK_HEAD=$(git rev-parse HEAD)
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+
+          echo "Fork HEAD: $FORK_HEAD"
+          echo "Upstream HEAD: $UPSTREAM_HEAD"
+          echo "Merge Base: $MERGE_BASE"
+
+          HAS_UPSTREAM_COMMITS="false"
+          if [ "$UPSTREAM_HEAD" != "$MERGE_BASE" ]; then
+            HAS_UPSTREAM_COMMITS="true"
+            echo "Upstream has new commits!"
+          else
+            echo "Fork is up to date with upstream."
+          fi
+
+          FORCE="${{ inputs.force_release }}"
+
+          if [ "$HAS_UPSTREAM_COMMITS" = "false" ] && [ "$FORCE" != "true" ]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "No new updates from upstream and force_release is false. Skipping release."
+            exit 0
+          fi
+
+          if [ "$HAS_UPSTREAM_COMMITS" = "true" ]; then
+            echo "Rebasing onto upstream/main..."
+            if ! git rebase upstream/main; then
+              echo "::error::Rebase conflict detected! Please resolve conflicts locally."
+              git rebase --abort
+              exit 1
+            fi
+
+            echo "Pushing rebased commits to origin main..."
+            git push --force-with-lease origin main
+          fi
+
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          DATE_STR=$(date +'%Y%m%d')
+          TAG_NAME="v${PKG_VERSION}-fork.${DATE_STR}.${SHORT_SHA}"
+          TITLE="Release v${PKG_VERSION} (${DATE_STR})"
+
+          echo "Creating tag: $TAG_NAME"
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            git tag -d "$TAG_NAME"
+            git push origin ":refs/tags/$TAG_NAME" || true
+          fi
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_title=$TITLE" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: sync
+    if: needs.sync.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            dist_cmd: npm run dist:win
+            artifact_name: token-monitor-win
+            artifact_path: |
+              dist/*.exe
+              dist/latest.yml
+              dist/*.blockmap
+          - os: ubuntu-latest
+            target: linux
+            dist_cmd: npm run dist:linux
+            artifact_name: token-monitor-linux
+            artifact_path: |
+              dist/*.AppImage
+              dist/latest-linux.yml
+              dist/*.blockmap
+          - os: macos-latest
+            target: mac
+            dist_cmd: npx electron-builder --config scripts/electron-builder.config.js --mac --arm64 -c.mac.forceCodeSigning=false -c.mac.identity=null --publish never
+            artifact_name: token-monitor-mac
+            artifact_path: |
+              dist/*.dmg
+              dist/*.zip
+              dist/latest-mac.yml
+              dist/*.blockmap
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.sync.outputs.release_tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure vendored tokscale
+        run: node scripts/ensure-vendored-tokscale.js
+
+      - name: Set Linux environment
+        if: matrix.target == 'linux'
+        run: |
+          echo "TOKEN_MONITOR_ELECTRON_TARGET=linux" >> "$GITHUB_ENV"
+          echo "TOKEN_MONITOR_LINUX_ELECTRON_VERSION=43.2.0" >> "$GITHUB_ENV"
+
+      - name: Build platform package
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: ${{ matrix.dist_cmd }}
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [sync, build]
+    if: always() && needs.sync.outputs.should_release == 'true' && needs.sync.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          pattern: token-monitor-*
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f -exec cp {} release-files/ \;
+          ls -la release-files/
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ needs.sync.outputs.release_tag }}
+          name: ${{ needs.sync.outputs.release_title }}
+          files: release-files/*
+          generate_release_notes: true
