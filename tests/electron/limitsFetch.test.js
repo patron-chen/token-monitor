@@ -31,6 +31,25 @@ test('the Electron transport sends provider requests through net.fetch', async (
   assert.deepEqual(calls[0].init.headers, { a: '1' });
 });
 
+test('an explicit Electron session isolates provider requests from the default session', async () => {
+  const calls = [];
+  const targetSession = {
+    async fetch(input, init) {
+      calls.push({ input, init });
+      return { ok: true };
+    }
+  };
+  const fetchFn = createElectronLimitsFetch({
+    net: { fetch: async () => { throw new Error('default session should not be used'); } },
+    env: { HTTPS_PROXY: 'http://environment.test:7890' },
+    session: targetSession
+  });
+  await fetchFn('https://provider.test/usage', { credentials: 'include' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.credentials, 'omit');
+  assert.equal(calls[0].init.cache, 'no-store');
+});
+
 // net.fetch issues from the default session, so anything other than 'omit'
 // lets that session's cookie jar replace a provider-managed Cookie header —
 // which no amount of re-pasting the credential can undo. It is an invariant of
@@ -93,7 +112,9 @@ test('an explicitly configured proxy env stays ahead of the system proxy', async
 test('every widget provider probe takes the runtime transport', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
 
-  assert.match(main, /function electronLimitsFetch\(\) \{\s*return createElectronLimitsFetch\(\{ net, env: process\.env \}\);/);
+  assert.match(main, /function electronLimitsFetch\(\) \{\s*const systemFetch = createElectronLimitsFetch\(\{ net, env: process\.env \}\);/);
+  assert.match(main, /aiProxyController\?\.requestSession\(\)/);
+  assert.match(main, /createElectronLimitsFetch\(\{ net, session: proxySession \}\)/);
   assert.match(main, /fetch: electronLimitsFetch\(\)/);
   assert.match(main, /opencodeGoApi\.fetchGoApi\(apiKey, \{\s*fetch: electronLimitsFetch\(\)/);
   // Every settings-side validation that can refuse to save a credential.
@@ -108,6 +129,23 @@ test('every widget provider probe takes the runtime transport', () => {
   ]) {
     assert.match(main, call);
   }
+});
+
+test('widget proxy wiring keeps credentials redacted and tests drafts in an isolated session', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'preload.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'renderer', 'app.js'), 'utf8');
+
+  assert.match(main, /proxyPasswordConfigured: Boolean\(settings\?\.proxyPassword\)/);
+  assert.match(main, /ipcMain\.handle\('proxy:test'/);
+  assert.match(main, /session\.fromPartition\(partition, options\)/);
+  assert.match(preload, /testProxy: \(draft\) => ipcRenderer\.invoke\('proxy:test', draft\)/);
+  assert.match(html, /id="proxyPasswordInput" type="password"/);
+  assert.doesNotMatch(html, /proxyPassword[^\n]+value=/);
+  assert.match(renderer, /if \(els\.proxyPasswordInput\?\.value\) draft\.proxyPassword = els\.proxyPasswordInput\.value;/);
+  assert.match(renderer, /window\.tokenMonitor\.testProxy\(proxyDraftFromInputs\(\)\)/);
+  assert.match(renderer, /saveSettings\(\{ proxyPassword: '' \}\)/);
 });
 
 test('the auto-detect pill requires a usable ZCode credential, not any install', () => {

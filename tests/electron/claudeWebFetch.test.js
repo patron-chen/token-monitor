@@ -90,3 +90,17 @@ test('Claude Web Electron fetch aborts the native request', async () => {
   await assert.rejects(promise, (error) => error?.name === 'AbortError');
   assert.equal(aborted, true);
 });
+
+test('Claude Web Electron fetch binds requests to the isolated AI proxy session', async () => {
+  const proxySession = { id: 'ai-proxy' };
+  const net = fakeNet((request) => {
+    assert.equal(request.options.session, proxySession);
+    const response = new EventEmitter();
+    response.statusCode = 200;
+    response.headers = {};
+    return response;
+  });
+  const fetch = createClaudeWebFetch(net, { session: () => proxySession });
+  const response = await fetch('https://claude.ai/api/organizations');
+  assert.equal(response.ok, true);
+});

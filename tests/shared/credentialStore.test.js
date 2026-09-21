@@ -336,3 +336,10 @@ test('stores Zed dashboard Cookie as a fixed credential and redacts it for rende
   assert.equal(store.settingsCredentials().zedCookie, 'zed.session=secret; c15t=challenge');
   assert.equal(credentialSettingsForRenderer({ zedCookie: 'secret' }).zedCookie, '');
 });
+
+test('stores the proxy password as a fixed credential and redacts it for renderer settings', (t) => {
+  const store = new CredentialStore(tempDataDir(t));
+  store.replaceSettingsCredentials({ proxyPassword: 'proxy-secret' });
+  assert.equal(store.settingsCredentials().proxyPassword, 'proxy-secret');
+  assert.equal(credentialSettingsForRenderer({ proxyPassword: 'proxy-secret' }).proxyPassword, '');
+});
