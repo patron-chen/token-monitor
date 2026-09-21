@@ -15,7 +15,7 @@ Click the `⚙` button in the bottom-right corner of the widget to open the sett
 
 | Section | What it controls |
 |---|---|
-| **General** | Language, launch at login, app updates (optionally downloaded in the background), Discord Rich Presence, About — including an on-demand redacted diagnostic report to attach to an issue — and Advanced (open the raw `settings.json` for less-common options such as `allTimeSince`). |
+| **General** | Language, launch at login, the AI-service network proxy, app updates (optionally downloaded in the background), Discord Rich Presence, About — including an on-demand redacted diagnostic report to attach to an issue — and Advanced (open the raw `settings.json` for less-common options such as `allTimeSince`). |
 | **Main** | Which Home modules appear and their order, plus the display currency (USD, TWD, HKD, or CNY; daily auto rate or a manual override). |
 | **Window** | Window behavior (float above other apps / normal / desktop-pinned), tray mode (macOS menu bar or Windows system tray, and what shows next to the icon), built-in or hand-built menu bar and floating-bubble layouts, hiding the taskbar/Dock icon while keeping the widget on screen, and the global show/hide shortcut. |
 | **Appearance** | Interface theme (presets such as Default and Obsidian, a porcelain light mode, or custom colors), per-vendor tool colors, system glass opacity / blur (on macOS 26+, Frosted Glass or native Liquid Glass; the Edge Dock can follow it or pick its own), and separate interface and display fonts. |
@@ -27,6 +27,12 @@ Click the `⚙` button in the bottom-right corner of the widget to open the sett
 iCloud Drive sync is available only to the macOS widget. It stores per-device usage snapshots and per-writer subscription snapshots under `iCloud Drive/Token Monitor/sync-v1/`; updates are eventually consistent. Provider credentials and raw provider responses are excluded. If iCloud Drive is not available, the widget reports that state and retains its last-good aggregate.
 
 The `⇧` button in the title bar cycles the window behavior.
+
+### AI-service network proxy
+
+Under **Settings → General → Network proxy**, choose **Follow system** (default), **Direct connection**, or **Custom proxy**. Custom proxies accept `http://`, `https://`, `socks://` / `socks5://`, and `socks4://` URLs. HTTP(S) proxies support a separately stored username and password; [Chromium does not support SOCKS proxy authentication](https://chromium.googlesource.com/chromium/src/+/HEAD/net/docs/proxy.md). The password is kept in the widget's existing restricted `credentials.json` store and is never sent to the renderer. Direct and custom modes use an [isolated in-memory Electron Session](https://www.electronjs.org/docs/latest/api/session), so non-AI requests keep their original networking state.
+
+The proxy is deliberately limited to Token Monitor's remote AI quota requests, account verification, and login helpers. Updates, exchange rates, service status, Hub traffic, Tokscale scans, local RPC, and spawned CLI processes keep their normal routes. **Test proxy** checks the unsaved draft in an isolated session; **Apply** validates and switches the active AI session atomically. Leaving the password blank preserves the saved password, while **Clear saved password** removes it explicitly.
 
 ---
 

@@ -1667,7 +1667,7 @@ test('an account message survives the stats re-renders until its own condition r
 
 test('account credentials persist through the settings:update body, not a second write path', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
-  assert.match(main, /ipcMain\.handle\('settings:update', async \(_event, patch\) => \{\s*const result = applySettingsPatch\(patch\);/);
+  assert.match(main, /ipcMain\.handle\('settings:update', async \(_event, patch\) => \{\s*const result = await applySettingsPatch\(patch\);/);
   assert.match(main, /createCredentialCommands\(\{\s*getSettings: \(\) => settings,\s*applySettingsPatch,\s*probeDeps: credentialProbeDeps\s*\}\)/);
   const body = main.slice(main.indexOf('function applySettingsPatch(patch) {'), main.indexOf("ipcMain.handle('appearance:preview'"));
   assert.match(body, /credentialCommands\.noteSettingsPatch\(patch\);/);

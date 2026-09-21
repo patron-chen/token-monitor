@@ -26,9 +26,12 @@ const { createOutboundFetch, resolveProxyConfig } = require('../../shared/outbou
  * referrer policy stands, and a provider that ever needs a looser one passes
  * `referrerPolicy` itself.
  */
-function createElectronNetFetch(net) {
+function createElectronNetFetch(net, targetSession = null) {
   return function electronNetFetch(input, init = {}) {
-    return net.fetch(input, { ...init, credentials: 'omit', cache: 'no-store' });
+    const fetchFn = targetSession?.fetch
+      ? targetSession.fetch.bind(targetSession)
+      : net.fetch.bind(net);
+    return fetchFn(input, { ...init, credentials: 'omit', cache: 'no-store' });
   };
 }
 
@@ -44,9 +47,10 @@ function createElectronNetFetch(net) {
  * @param {{ net: { fetch: typeof fetch }, env?: NodeJS.ProcessEnv }} options
  * @returns {typeof fetch}
  */
-function createElectronLimitsFetch({ net, env = process.env } = {}) {
+function createElectronLimitsFetch({ net, env = process.env, session = null, ignoreEnvProxy = false } = {}) {
+  if (session) return createElectronNetFetch(net, session);
   const proxy = resolveProxyConfig(env);
-  if (proxy.httpProxy || proxy.httpsProxy) return createOutboundFetch(env);
+  if (!ignoreEnvProxy && (proxy.httpProxy || proxy.httpsProxy)) return createOutboundFetch(env);
   return createElectronNetFetch(net);
 }
 

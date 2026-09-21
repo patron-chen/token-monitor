@@ -10,11 +10,12 @@ const SETTINGS_MIGRATION_VERSION = 1;
 const MIMO_MIGRATION_VERSION = 1;
 
 // Provider-owned keys come from the account declarations (each field's
-// storePath), so adding a provider credential never edits this file. The two
-// hub secrets stay literal — they are not provider account fields. The
+// storePath), so adding a provider credential never edits this file. Hub secrets
+// and the proxy password stay literal — they are not provider account fields. The
 // declarations are leaf modules, which is what lets this file sit inside the
 // require cycle providers/factory/limits.js → credentialStore creates.
 const CREDENTIAL_SETTING_PATHS = Object.freeze({
+  proxyPassword: ['network', 'proxyPassword'],
   hubHostSecret: ['hub', 'hostSecret'],
   secret: ['hub', 'clientSecret'],
   ...providerCredentialSettingPaths()

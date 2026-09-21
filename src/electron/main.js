@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, screen, session, shell, systemPreferences } = require('electron');
+
 const { autoUpdater } = require('electron-updater');
 const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, readJson, sharedDataDir } = require('../shared/config');
 const {
@@ -25,14 +26,13 @@ const fontSettingsApi = require('../shared/fontSettings');
 const motionPreferenceApi = require('./motionPreference');
 const { clearBackgroundImage, getBackgroundImage, importBackgroundImage } = require('./backgroundImage');
 const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
-const { createClaudeWebFetch } = require('./providers/claude/webFetch');
 const { runAntigravityOAuthLogin } = require('./providers/antigravity/oauthLogin');
 const antigravityOAuth = require('../shared/providers/antigravity/oauth');
 const {
   createWorkbuddyLocalAuth,
   isSupportedWorkbuddyLocalAppPlatform
 } = require('./providers/workbuddy/localAuth');
-const { createElectronLimitsFetch } = require('./limits/fetch');
+const { createProxyRuntime } = require('./proxyRuntime');
 const {
   expandedBoundsForCollapse,
   normalWindowBounds,
@@ -50,17 +50,21 @@ const {
 // a closed parent pipe turns the next log call into an unhandled 'error'
 // event and Electron pops a "JavaScript error in the main process" dialog.
 installSafeStdout();
-const electronClaudeWebFetch = createClaudeWebFetch(net);
+const proxyRuntime = createProxyRuntime({
+  net,
+  sessionFactory: (partition, options) => session.fromPartition(partition, options)
+});
+const electronClaudeWebFetch = proxyRuntime.claudeWebFetch;
 const electronWorkbuddyLocalAuth = createWorkbuddyLocalAuth({
   fetch: electronLimitsFetch()
 });
 // One transport for every widget provider call that resolves through
 // `deps.fetch` — see limits/fetch.js for why the branch and the request options
 // are what they are. Probes that build their own transport inherit neither
-// branch: cursorProbe and antigravityProbe on node:https, Claude Web on the
-// claudeWebFetch above, the CLI fallbacks on a spawned binary.
+// branch: the collector's Cursor and Antigravity probes on node:https, Claude
+// Web on the claudeWebFetch above, the CLI fallbacks on a spawned binary.
 function electronLimitsFetch() {
-  return createElectronLimitsFetch({ net, env: process.env });
+  return proxyRuntime.limitsFetch;
 }
 
 // Settings-side provider probes take the same transport as the collector's.
@@ -587,6 +591,7 @@ function defaultSettings() {
     edgeDockItems: null,
     lastViewState: { period: 'today', breakdown: 'tool' },
     discordRpcEnabled: false,
+    ...proxyRuntime.defaults(),
     deviceId: process.env.TOKEN_MONITOR_DEVICE_ID || defaultDeviceId(),
     icloudWriterId: '',
     lastPostedDeviceId: '',
@@ -2552,6 +2557,7 @@ function readSettings() {
     merged.trayCustomLayout = normalizeTrayLayout(merged.trayCustomLayout);
     merged.showTrayProviderBadge = parseBoolean(merged.showTrayProviderBadge, false);
     merged.windowToggleShortcut = normalizeWindowToggleShortcut(merged.windowToggleShortcut);
+    Object.assign(merged, proxyRuntime.normalizeSaved(merged, defaults));
     // 如果设置了 opencodeCookie 但没有 profiles，自动迁移
     if (merged.opencodeCookie && Object.keys(merged.opencodeProfiles || {}).length === 0) {
       merged.opencodeProfiles = { default: { cookie: merged.opencodeCookie, enabled: true } };
@@ -2563,6 +2569,7 @@ function readSettings() {
   catch (_error) {
     const defaults = defaultSettings();
     Object.assign(defaults, normalizeTrayModeSettings(defaults));
+    Object.assign(defaults, proxyRuntime.defaults());
     return normalizeWindowBehaviorSettings(defaults);
   }
 }
@@ -5033,6 +5040,7 @@ function settingsForRenderer() {
     ...rendererSettings,
     locale: trayMenuLocale(),
     ...redactedCredentials,
+    proxyPasswordConfigured: Boolean(settings?.proxyPassword),
     // On a hub the shared list is the truth; settings.subscriptions is only the
     // last-known cache behind it.
     subscriptions: effectiveSubscriptions(),
@@ -6759,7 +6767,8 @@ function createWindow(boundsOverride, options = {}) {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: true
     }
   });
   mainWindow = win;
@@ -7004,7 +7013,7 @@ async function cursorStatusValue({ discover = false } = {}) {
   const disabled = new Set(normalizeCursorDisabledAccountIds(settings?.cursorDisabledAccountIds));
   const manual = new Set(normalizeCursorAccountIds(settings?.cursorManualAccountIds));
   const safeAccounts = await Promise.all(accounts.map(async (account) => {
-    const probeResult = await cursorProbe.probe(account.sessionToken);
+    const probeResult = await cursorProbe.probe(account.sessionToken, { fetch: electronLimitsFetch() });
     return {
       id: account.id,
       enabled: !disabled.has(account.id),
@@ -7045,9 +7054,15 @@ function rebuildWindow() {
   });
 }
 
+app.on('login', (event, _webContents, _request, authInfo, callback) => {
+  proxyRuntime.onLogin(event, authInfo, callback);
+});
+
 app.whenReady().then(() => {
+  return (async () => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
   ensureSettingsLoaded();
+  Object.assign(settings, await proxyRuntime.start(settings));
   // Switching the OS between light and dark repaints the taskbar underneath an
   // icon we have already handed to the shell, so the renderer has to recompose
   // it — nothing else in the app would notice the change.
@@ -7123,6 +7138,7 @@ app.whenReady().then(() => {
     await clearBackgroundImage(app.getPath('userData'));
     return true;
   });
+  ipcMain.handle('proxy:test', (_event, draft = {}) => proxyRuntime.test(draft, settings));
 
   // The dock card decorates its plan cell from the subscription records the
   // appearance carries, and only a settings push re-sends that appearance — while
@@ -7196,13 +7212,13 @@ app.whenReady().then(() => {
   // pausing the session archive must not be reported done while the worker can
   // still capture under the old value.
   ipcMain.handle('settings:update', async (_event, patch) => {
-    const result = applySettingsPatch(patch);
+    const result = await applySettingsPatch(patch);
     await latestUsageHost?.transformSettingsApplied?.();
     return result;
   });
   // The settings:update body, named so a credential save persists through the
   // exact same normalization, runtime reconfigure and limit invalidation.
-  function applySettingsPatch(patch) {
+  async function applySettingsPatch(patch) {
     credentialCommands.noteSettingsPatch(patch);
     const previousSettingsState = settings;
     const previousRuntimeSettings = JSON.parse(JSON.stringify(settings));
@@ -7261,6 +7277,10 @@ app.whenReady().then(() => {
     if (patch.heatmapMetric !== undefined) normalizedPatch.heatmapMetric = normalizeHeatmapMetric(patch.heatmapMetric, settings.heatmapMetric);
     if (patch.homeActiveDaysWindow !== undefined) normalizedPatch.homeActiveDaysWindow = normalizeHomeActiveDaysWindow(patch.homeActiveDaysWindow, settings.homeActiveDaysWindow);
     if (patch.sessionContextMetric !== undefined) normalizedPatch.sessionContextMetric = normalizeSessionContextMetric(patch.sessionContextMetric, settings.sessionContextMetric);
+    if (['proxyMode', 'proxyUrl', 'proxyBypassRules', 'proxyUsername', 'proxyPassword']
+      .some((key) => Object.hasOwn(patch || {}, key))) {
+      Object.assign(normalizedPatch, proxyRuntime.normalizePatch(settings, normalizedPatch));
+    }
     settings = normalizeWindowBehaviorSettings({
       ...settings,
       ...normalizedPatch,
@@ -7391,6 +7411,7 @@ app.whenReady().then(() => {
     }, windowBehaviorSelection(normalizedPatch));
     retainIcloudDeviceIdentity(previousSettingsState, settings);
     settings.archivedClientUsage = normalizeArchivedClientUsage(settings.archivedClientUsage);
+    const proxyChanged = proxyRuntime.changed(previousRuntimeSettings, settings);
     if (settings.clients !== previousClients) updateArchivedClientUsage(previousClients, settings.clients);
     delete settings.edgeDrawerEnabled;
     try {
@@ -7398,6 +7419,15 @@ app.whenReady().then(() => {
     } catch (error) {
       settings = previousSettingsState;
       throw error;
+    }
+    if (proxyChanged) {
+      await proxyRuntime.applySaved(settings, () => {
+        settings = previousSettingsState;
+        try { saveSettings({ throwOnError: true }); }
+        catch (rollbackError) {
+          console.warn(`[proxy] Could not restore saved proxy settings: ${rollbackError.message}`);
+        }
+      });
     }
     // A worker-hosted transform holds its own copy of the settings it reads.
     // Update it now rather than when the usage reconfigure settles: pausing the
@@ -7467,6 +7497,11 @@ app.whenReady().then(() => {
           console.log(`[limits-runtime] settings refresh failed: ${error.message}`);
         });
       }
+    }
+    if (proxyChanged) {
+      void queueLimitInvalidation({}, 'proxy-change').catch((error) => {
+        console.log(`[limits-runtime] proxy refresh failed: ${error.message}`);
+      });
     }
     if (settings.showTrayIcon !== previousShowTrayIcon) {
       if (settings.showTrayIcon) ensureTray();
@@ -7818,7 +7853,7 @@ app.whenReady().then(() => {
     const token = normalizeManualCookie(raw);
     if (!token) return { ok: false, error: 'Empty or malformed token' };
     try {
-      const probeResult = await cursorProbe.probe(token);
+      const probeResult = await cursorProbe.probe(token, { fetch: electronLimitsFetch() });
       if (!probeResult.ok) return { ok: false, error: probeResult.error?.message || 'Cursor rejected the token' };
       const accountId = await cursorAuth.runCursorLogin(token);
       const disabled = normalizeCursorDisabledAccountIds(settings.cursorDisabledAccountIds)
@@ -8754,6 +8789,7 @@ app.whenReady().then(() => {
   });
   maybeRunBackgroundUpdateCheck();
   startAppUpdateBackgroundChecks();
+  })();
 });
 
 app.on('second-instance', focusExistingWindow);
