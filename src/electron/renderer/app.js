@@ -424,6 +424,19 @@ Object.assign(els, {
   startupGroup: document.getElementById('startupGroup'),
   startAtLoginInput: document.getElementById('startAtLoginInput'),
   startupNote: document.getElementById('startupNote'),
+  proxyModeInput: document.getElementById('proxyModeInput'),
+  proxyCustomFields: document.getElementById('proxyCustomFields'),
+  proxyUrlInput: document.getElementById('proxyUrlInput'),
+  proxyBypassInput: document.getElementById('proxyBypassInput'),
+  proxyAuthFields: document.getElementById('proxyAuthFields'),
+  proxyUsernameInput: document.getElementById('proxyUsernameInput'),
+  proxyPasswordInput: document.getElementById('proxyPasswordInput'),
+  proxyPasswordConfigured: document.getElementById('proxyPasswordConfigured'),
+  proxySocksAuthNote: document.getElementById('proxySocksAuthNote'),
+  proxyTestButton: document.getElementById('proxyTestButton'),
+  proxyApplyButton: document.getElementById('proxyApplyButton'),
+  proxyClearPasswordButton: document.getElementById('proxyClearPasswordButton'),
+  proxyStatus: document.getElementById('proxyStatus'),
   advancedSettingsGroup: document.getElementById('advancedSettingsGroup'),
   advancedSettingsToggle: document.getElementById('advancedSettingsToggle'),
   advancedSettingsDetails: document.getElementById('advancedSettingsDetails'),
@@ -818,7 +831,8 @@ function settingsSectionSummary(section) {
       ? (state.settings.startAtLogin ? t('settings.summary.on') : t('settings.summary.off'))
       : t('settings.summary.unavailable');
     return t('settings.summary.general', {
-      startup
+      startup,
+      proxy: t(`settings.proxy.mode.${state.settings?.proxyMode || 'system'}`)
     });
   }
   return '';
@@ -7856,6 +7870,118 @@ function syncHideAppIconControl(showTrayIcon, trayMode) {
   els.hideAppIconOptions?.classList.toggle('hidden', !els.hideAppIconInput.checked);
 }
 
+const DEFAULT_PROXY_BYPASS_RULES = '<local>,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7,fe80::/10';
+let proxyDraftDirty = false;
+let proxyBusy = false;
+
+function proxyDraftFromInputs() {
+  const draft = {
+    proxyMode: ['direct', 'custom'].includes(els.proxyModeInput?.value) ? els.proxyModeInput.value : 'system',
+    proxyUrl: els.proxyUrlInput?.value || '',
+    proxyBypassRules: els.proxyBypassInput?.value || DEFAULT_PROXY_BYPASS_RULES,
+    proxyUsername: els.proxyUsernameInput?.value || ''
+  };
+  if (els.proxyPasswordInput?.value) draft.proxyPassword = els.proxyPasswordInput.value;
+  return draft;
+}
+
+function proxyDraftUsesSocks() {
+  return /^socks(?:4|5)?:\/\//i.test(String(els.proxyUrlInput?.value || '').trim());
+}
+
+function syncProxyDraftUi({ force = false } = {}) {
+  if (!els.proxyModeInput) return;
+  if (force || !proxyDraftDirty) {
+    els.proxyModeInput.value = ['direct', 'custom'].includes(state.settings?.proxyMode)
+      ? state.settings.proxyMode
+      : 'system';
+    els.proxyUrlInput.value = state.settings?.proxyUrl || '';
+    els.proxyBypassInput.value = state.settings?.proxyBypassRules || DEFAULT_PROXY_BYPASS_RULES;
+    els.proxyUsernameInput.value = state.settings?.proxyUsername || '';
+    els.proxyPasswordInput.value = '';
+  }
+  const custom = els.proxyModeInput.value === 'custom';
+  const socks = custom && proxyDraftUsesSocks();
+  els.proxyCustomFields?.classList.toggle('hidden', !custom);
+  els.proxyAuthFields?.classList.toggle('is-disabled', socks);
+  els.proxyUsernameInput.disabled = socks;
+  els.proxyPasswordInput.disabled = socks;
+  els.proxySocksAuthNote?.classList.toggle('hidden', !socks);
+  const passwordConfigured = Boolean(state.settings?.proxyPasswordConfigured);
+  els.proxyPasswordConfigured?.classList.toggle('hidden', !passwordConfigured || socks);
+  els.proxyClearPasswordButton?.classList.toggle('hidden', !passwordConfigured);
+  els.proxyApplyButton.disabled = proxyBusy || !proxyDraftDirty;
+  els.proxyTestButton.disabled = proxyBusy;
+  els.proxyClearPasswordButton.disabled = proxyBusy;
+}
+
+function setProxyStatus(code = '', error = false) {
+  if (!els.proxyStatus) return;
+  const known = new Set([
+    'testing', 'applying', 'applied', 'password-cleared', 'success', 'bypassed',
+    'invalid-config', 'invalid-url', 'unsupported-scheme', 'embedded-credentials',
+    'invalid-bypass', 'timeout', 'authentication-failed', 'connection-failed', 'http-error'
+  ]);
+  const normalized = known.has(code) ? code : 'invalid-config';
+  els.proxyStatus.textContent = code ? t(`settings.proxy.status.${normalized}`) : '';
+  els.proxyStatus.classList.toggle('is-error', Boolean(code && error));
+  els.proxyStatus.classList.toggle('is-success', Boolean(code && !error));
+}
+
+function markProxyDraftDirty() {
+  proxyDraftDirty = true;
+  setProxyStatus('');
+  syncProxyDraftUi();
+  renderSettingsSummaries();
+}
+
+async function testProxyDraft() {
+  proxyBusy = true;
+  setProxyStatus('testing');
+  syncProxyDraftUi();
+  try {
+    const result = await window.tokenMonitor.testProxy(proxyDraftFromInputs());
+    setProxyStatus(result?.code || 'connection-failed', !result?.ok);
+  } catch (_) {
+    setProxyStatus('connection-failed', true);
+  } finally {
+    proxyBusy = false;
+    syncProxyDraftUi();
+  }
+}
+
+async function applyProxyDraft() {
+  proxyBusy = true;
+  setProxyStatus('applying');
+  syncProxyDraftUi();
+  try {
+    await saveSettings(proxyDraftFromInputs());
+    proxyDraftDirty = false;
+    syncProxyDraftUi({ force: true });
+    setProxyStatus('applied');
+  } catch (_) {
+    setProxyStatus('invalid-config', true);
+  } finally {
+    proxyBusy = false;
+    syncProxyDraftUi();
+  }
+}
+
+async function clearProxyPassword() {
+  proxyBusy = true;
+  syncProxyDraftUi();
+  try {
+    await saveSettings({ proxyPassword: '' });
+    if (els.proxyPasswordInput) els.proxyPasswordInput.value = '';
+    setProxyStatus('password-cleared');
+  } catch (_) {
+    setProxyStatus('invalid-config', true);
+  } finally {
+    proxyBusy = false;
+    syncProxyDraftUi();
+  }
+}
+
 function syncSettingsForm() {
   if (isRendererWindowHidden()) {
     applyInitialBreakdownPreference();
@@ -7879,6 +8005,7 @@ function syncSettingsForm() {
   syncWindowBehaviorControls();
   if (!isSettingsSurfaceVisible()) return;
   syncHubModeUi();
+  syncProxyDraftUi();
   if (els.languageInput) els.languageInput.value = currentLanguage();
   if (els.periodMonthModeInput) {
     els.periodMonthModeInput.value = fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode);
@@ -11450,6 +11577,14 @@ els.showTrayProviderBadgeInput.addEventListener('change', () => {
 els.windowToggleShortcutValue?.addEventListener('click', startWindowShortcutRecording);
 els.windowToggleShortcutClearButton?.addEventListener('click', () => setWindowToggleShortcut('').catch(() => {}));
 els.startAtLoginInput?.addEventListener('change', () => saveSettings({ startAtLogin: els.startAtLoginInput.checked }));
+els.proxyModeInput?.addEventListener('change', markProxyDraftDirty);
+els.proxyUrlInput?.addEventListener('input', markProxyDraftDirty);
+els.proxyBypassInput?.addEventListener('input', markProxyDraftDirty);
+els.proxyUsernameInput?.addEventListener('input', markProxyDraftDirty);
+els.proxyPasswordInput?.addEventListener('input', markProxyDraftDirty);
+els.proxyTestButton?.addEventListener('click', () => { void testProxyDraft(); });
+els.proxyApplyButton?.addEventListener('click', () => { void applyProxyDraft(); });
+els.proxyClearPasswordButton?.addEventListener('click', () => { void clearProxyPassword(); });
 els.automaticAppUpdatesInput?.addEventListener('change', () => saveSettings({ automaticAppUpdates: els.automaticAppUpdatesInput.checked }));
 els.glassInput.addEventListener('change', saveAppearanceFromControls);
 els.blurInput.addEventListener('change', saveAppearanceFromControls);

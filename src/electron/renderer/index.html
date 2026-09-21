@@ -66,6 +66,48 @@
                 <span id="startupNote" class="settings-note settings-item-desc" data-i18n="settings.startup.available">Available in packaged builds. On Linux, run the AppImage build to enable.</span>
               </label>
             </div>
+            <div id="proxyGroup" class="settings-group settings-subgroup proxy-settings">
+              <div class="settings-group-header"><span data-i18n="settings.proxy.title">Network proxy</span></div>
+              <label class="settings-field">
+                <span class="settings-field-label" data-i18n="settings.proxy.mode">Connection mode</span>
+                <select id="proxyModeInput">
+                  <option value="system" data-i18n="settings.proxy.mode.system">Follow system</option>
+                  <option value="direct" data-i18n="settings.proxy.mode.direct">Direct connection</option>
+                  <option value="custom" data-i18n="settings.proxy.mode.custom">Custom proxy</option>
+                </select>
+              </label>
+              <span class="settings-item-desc" data-i18n="settings.proxy.scope">Applies only to AI quota, account verification, and login helper requests.</span>
+              <div id="proxyCustomFields" class="proxy-custom-fields hidden">
+                <label class="settings-field">
+                  <span class="settings-field-label" data-i18n="settings.proxy.url">Proxy URL</span>
+                  <input id="proxyUrlInput" type="text" maxlength="2048" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:7890" />
+                  <span class="settings-item-desc" data-i18n="settings.proxy.urlHelp">HTTP(S), SOCKS5, and SOCKS4 are supported. Enter credentials separately.</span>
+                </label>
+                <label class="settings-field">
+                  <span class="settings-field-label" data-i18n="settings.proxy.bypass">Bypass rules</span>
+                  <textarea id="proxyBypassInput" rows="3" maxlength="8192" spellcheck="false"></textarea>
+                  <span class="settings-item-desc" data-i18n="settings.proxy.bypassHelp">Separate rules with commas or new lines.</span>
+                </label>
+                <div id="proxyAuthFields" class="proxy-auth-fields">
+                  <label class="settings-field">
+                    <span class="settings-field-label" data-i18n="settings.proxy.username">Username</span>
+                    <input id="proxyUsernameInput" type="text" maxlength="512" autocomplete="off" />
+                  </label>
+                  <label class="settings-field">
+                    <span class="settings-field-label" data-i18n="settings.proxy.password">Password</span>
+                    <input id="proxyPasswordInput" type="password" maxlength="2048" autocomplete="new-password" />
+                    <span id="proxyPasswordConfigured" class="settings-item-desc hidden" data-i18n="settings.proxy.passwordConfigured">A saved password is configured. Leave blank to keep it.</span>
+                  </label>
+                </div>
+                <span id="proxySocksAuthNote" class="settings-item-desc hidden" data-i18n="settings.proxy.socksAuth">SOCKS proxy authentication is not supported by Chromium. Saved HTTP credentials are preserved.</span>
+              </div>
+              <div class="settings-actions proxy-actions">
+                <button id="proxyTestButton" type="button" data-i18n="settings.proxy.test">Test proxy</button>
+                <button id="proxyApplyButton" type="button" data-i18n="settings.proxy.apply">Apply</button>
+                <button id="proxyClearPasswordButton" type="button" data-i18n="settings.proxy.clearPassword">Clear saved password</button>
+              </div>
+              <div id="proxyStatus" class="proxy-status" role="status" aria-live="polite"></div>
+            </div>
             <div class="settings-subgroup maintenance-section app-update-settings">
               <div class="settings-group-header maintenance-header"><span data-i18n="settings.appUpdate.title">App Updates</span><span data-i18n="settings.appUpdate.source">GitHub releases</span></div>
               <label id="automaticAppUpdatesRow" class="checkbox-label settings-item">
