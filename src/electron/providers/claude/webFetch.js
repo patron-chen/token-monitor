@@ -6,7 +6,7 @@ function abortError() {
   return error;
 }
 
-function createClaudeWebFetch(net) {
+function createClaudeWebFetch(net, configuration = {}) {
   return function claudeWebFetch(url, options = {}) {
     return new Promise((resolve, reject) => {
       const signal = options.signal;
@@ -26,9 +26,13 @@ function createClaudeWebFetch(net) {
         finish(reject, abortError());
         return;
       }
+      const targetSession = typeof configuration.session === 'function'
+        ? configuration.session()
+        : configuration.session;
       request = net.request({
         method: String(options.method || 'GET').toUpperCase(),
-        url: String(url)
+        url: String(url),
+        ...(targetSession ? { session: targetSession } : {})
       });
       for (const [name, value] of Object.entries(options.headers || {})) {
         if (value !== undefined && value !== null) request.setHeader(name, String(value));

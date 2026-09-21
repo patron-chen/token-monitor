@@ -86,11 +86,12 @@ test('clientDataDirPresence detects Antigravity via the CLI conversations dir', 
   try {
     delete process.env.GEMINI_CLI_HOME;
     os.homedir = () => base;
-    assert.equal(clientDataDirPresence('antigravity').antigravity, false);
+    const detectionOptions = { homeDir: base, env: {} };
+    assert.equal(clientDataDirPresence('antigravity', detectionOptions).antigravity, false);
     fs.mkdirSync(cliDir, { recursive: true });
-    assert.equal(clientDataDirPresence('antigravity').antigravity, true);
+    assert.equal(clientDataDirPresence('antigravity', detectionOptions).antigravity, true);
     // CLI-only home, no countable usage yet: must read waiting, not missing.
-    assert.deepEqual(deriveClientStatus('antigravity', { clients: {} }), { antigravity: 'waiting' });
+    assert.deepEqual(deriveClientStatus('antigravity', { clients: {} }, detectionOptions), { antigravity: 'waiting' });
   } finally {
     os.homedir = originalHome;
     if (prevGeminiHome === undefined) delete process.env.GEMINI_CLI_HOME;
