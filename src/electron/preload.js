@@ -5,6 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('tokenMonitor', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
+  testProxy: (draft) => ipcRenderer.invoke('proxy:test', draft),
   // Subscriptions are shared across devices when a hub is configured, so they
   // have their own channel: the write is a network round trip main.js has to
   // await, and it can fail in ways a settings write cannot.

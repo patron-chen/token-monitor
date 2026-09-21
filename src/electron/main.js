@@ -34,6 +34,12 @@ const {
 } = require('./providers/workbuddy/localAuth');
 const { createElectronLimitsFetch } = require('./limits/fetch');
 const {
+  DEFAULT_PROXY_BYPASS_RULES,
+  createAiProxyController,
+  normalizeProxySettings,
+  proxySettingsChanged
+} = require('./aiProxy');
+const {
   expandedBoundsForCollapse,
   normalWindowBounds,
   persistWindowState,
@@ -50,7 +56,10 @@ const {
 // a closed parent pipe turns the next log call into an unhandled 'error'
 // event and Electron pops a "JavaScript error in the main process" dialog.
 installSafeStdout();
-const electronClaudeWebFetch = createClaudeWebFetch(net);
+let aiProxyController = null;
+const electronClaudeWebFetch = createClaudeWebFetch(net, {
+  session: () => aiProxyController?.requestSession() || null
+});
 const electronWorkbuddyLocalAuth = createWorkbuddyLocalAuth({
   fetch: electronLimitsFetch()
 });
@@ -60,7 +69,12 @@ const electronWorkbuddyLocalAuth = createWorkbuddyLocalAuth({
 // branch: cursorProbe and antigravityProbe on node:https, Claude Web on the
 // claudeWebFetch above, the CLI fallbacks on a spawned binary.
 function electronLimitsFetch() {
-  return createElectronLimitsFetch({ net, env: process.env });
+  const systemFetch = createElectronLimitsFetch({ net, env: process.env });
+  return (input, init = {}) => {
+    const proxySession = aiProxyController?.requestSession();
+    if (!proxySession) return systemFetch(input, init);
+    return createElectronLimitsFetch({ net, session: proxySession })(input, init);
+  };
 }
 
 // Settings-side provider probes take the same transport as the collector's.
@@ -577,6 +591,11 @@ function defaultSettings() {
     edgeDockItems: null,
     lastViewState: { period: 'today', breakdown: 'tool' },
     discordRpcEnabled: false,
+    proxyMode: 'system',
+    proxyUrl: '',
+    proxyBypassRules: DEFAULT_PROXY_BYPASS_RULES,
+    proxyUsername: '',
+    proxyPassword: '',
     deviceId: process.env.TOKEN_MONITOR_DEVICE_ID || defaultDeviceId(),
     lastPostedDeviceId: '',
     clients: clientsCsvForSetting(process.env.TOKEN_MONITOR_CLIENTS),
@@ -2538,6 +2557,12 @@ function readSettings() {
     merged.trayCustomLayout = normalizeTrayLayout(merged.trayCustomLayout);
     merged.showTrayProviderBadge = parseBoolean(merged.showTrayProviderBadge, false);
     merged.windowToggleShortcut = normalizeWindowToggleShortcut(merged.windowToggleShortcut);
+    try {
+      Object.assign(merged, normalizeProxySettings(merged));
+    } catch (error) {
+      console.warn(`[proxy] Ignoring invalid saved proxy settings (${error.code || 'invalid-config'})`);
+      Object.assign(merged, normalizeProxySettings(defaults));
+    }
     // 如果设置了 opencodeCookie 但没有 profiles，自动迁移
     if (merged.opencodeCookie && Object.keys(merged.opencodeProfiles || {}).length === 0) {
       merged.opencodeProfiles = { default: { cookie: merged.opencodeCookie, enabled: true } };
@@ -2549,6 +2574,7 @@ function readSettings() {
   catch (_error) {
     const defaults = defaultSettings();
     Object.assign(defaults, normalizeTrayModeSettings(defaults));
+    Object.assign(defaults, normalizeProxySettings(defaults));
     return normalizeWindowBehaviorSettings(defaults);
   }
 }
@@ -4697,6 +4723,7 @@ function settingsForRenderer() {
     ...rendererSettings,
     locale: trayMenuLocale(),
     ...redactedCredentials,
+    proxyPasswordConfigured: Boolean(settings?.proxyPassword),
     // On a hub the shared list is the truth; settings.subscriptions is only the
     // last-known cache behind it.
     subscriptions: effectiveSubscriptions(),
@@ -6634,7 +6661,7 @@ async function cursorStatusValue({ discover = false } = {}) {
   const disabled = new Set(normalizeCursorDisabledAccountIds(settings?.cursorDisabledAccountIds));
   const manual = new Set(normalizeCursorAccountIds(settings?.cursorManualAccountIds));
   const safeAccounts = await Promise.all(accounts.map(async (account) => {
-    const probeResult = await cursorProbe.probe(account.sessionToken);
+    const probeResult = await cursorProbe.probe(account.sessionToken, { fetch: electronLimitsFetch() });
     return {
       id: account.id,
       enabled: !disabled.has(account.id),
@@ -6675,9 +6702,28 @@ function rebuildWindow() {
   });
 }
 
+app.on('login', (event, _webContents, _request, authInfo, callback) => {
+  const credentials = aiProxyController?.activeCredentialsFor(authInfo);
+  if (!credentials) return;
+  event.preventDefault();
+  callback(credentials.username, credentials.password);
+});
+
 app.whenReady().then(() => {
+  return (async () => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
   ensureSettingsLoaded();
+  aiProxyController = createAiProxyController({
+    sessionFactory: (partition, options) => session.fromPartition(partition, options),
+    net
+  });
+  try {
+    await aiProxyController.apply(settings);
+  } catch (_error) {
+    console.warn('[proxy] Could not apply saved proxy settings');
+    Object.assign(settings, normalizeProxySettings({}));
+    await aiProxyController.apply(settings);
+  }
   // Switching the OS between light and dark repaints the taskbar underneath an
   // icon we have already handed to the shell, so the renderer has to recompose
   // it — nothing else in the app would notice the change.
@@ -6753,6 +6799,13 @@ app.whenReady().then(() => {
     await clearBackgroundImage(app.getPath('userData'));
     return true;
   });
+  ipcMain.handle('proxy:test', (_event, draft = {}) => aiProxyController.test({
+    ...settings,
+    ...draft,
+    proxyPassword: Object.hasOwn(draft || {}, 'proxyPassword')
+      ? draft.proxyPassword
+      : settings.proxyPassword
+  }));
 
   // The dock card decorates its plan cell from the subscription records the
   // appearance carries, and only a settings push re-sends that appearance — while
@@ -6818,7 +6871,7 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:update', (_event, patch) => applySettingsPatch(patch));
   // The settings:update body, named so a credential save persists through the
   // exact same normalization, runtime reconfigure and limit invalidation.
-  function applySettingsPatch(patch) {
+  async function applySettingsPatch(patch) {
     credentialCommands.noteSettingsPatch(patch);
     const previousSettingsState = settings;
     const previousRuntimeSettings = JSON.parse(JSON.stringify(settings));
@@ -6876,6 +6929,10 @@ app.whenReady().then(() => {
     if (patch.heatmapMetric !== undefined) normalizedPatch.heatmapMetric = normalizeHeatmapMetric(patch.heatmapMetric, settings.heatmapMetric);
     if (patch.homeActiveDaysWindow !== undefined) normalizedPatch.homeActiveDaysWindow = normalizeHomeActiveDaysWindow(patch.homeActiveDaysWindow, settings.homeActiveDaysWindow);
     if (patch.sessionContextMetric !== undefined) normalizedPatch.sessionContextMetric = normalizeSessionContextMetric(patch.sessionContextMetric, settings.sessionContextMetric);
+    if (['proxyMode', 'proxyUrl', 'proxyBypassRules', 'proxyUsername', 'proxyPassword']
+      .some((key) => Object.hasOwn(patch || {}, key))) {
+      Object.assign(normalizedPatch, normalizeProxySettings({ ...settings, ...normalizedPatch }));
+    }
     settings = normalizeWindowBehaviorSettings({
       ...settings,
       ...normalizedPatch,
@@ -7002,6 +7059,7 @@ app.whenReady().then(() => {
         : normalizeCustomPricingSetting(settings.customModelPricing)
     }, windowBehaviorSelection(normalizedPatch));
     settings.archivedClientUsage = normalizeArchivedClientUsage(settings.archivedClientUsage);
+    const proxyChanged = proxySettingsChanged(previousRuntimeSettings, settings);
     if (settings.clients !== previousClients) updateArchivedClientUsage(previousClients, settings.clients);
     delete settings.edgeDrawerEnabled;
     try {
@@ -7009,6 +7067,18 @@ app.whenReady().then(() => {
     } catch (error) {
       settings = previousSettingsState;
       throw error;
+    }
+    if (proxyChanged) {
+      try {
+        await aiProxyController.apply(settings);
+      } catch (error) {
+        settings = previousSettingsState;
+        try { saveSettings({ throwOnError: true }); }
+        catch (rollbackError) {
+          console.warn(`[proxy] Could not restore saved proxy settings: ${rollbackError.message}`);
+        }
+        throw new Error('Could not apply proxy settings', { cause: error });
+      }
     }
     if (patch?.limitProviders !== undefined) initialLimitProvidersPending = false;
     if (JSON.stringify(settings.customModelPricing || []) !== previousCustomModelPricing) {
@@ -7074,6 +7144,11 @@ app.whenReady().then(() => {
           console.log(`[limits-runtime] settings refresh failed: ${error.message}`);
         });
       }
+    }
+    if (proxyChanged) {
+      void queueLimitInvalidation({}, 'proxy-change').catch((error) => {
+        console.log(`[limits-runtime] proxy refresh failed: ${error.message}`);
+      });
     }
     if (settings.showTrayIcon !== previousShowTrayIcon) {
       if (settings.showTrayIcon) ensureTray();
@@ -7416,7 +7491,7 @@ app.whenReady().then(() => {
     const token = normalizeManualCookie(raw);
     if (!token) return { ok: false, error: 'Empty or malformed token' };
     try {
-      const probeResult = await cursorProbe.probe(token);
+      const probeResult = await cursorProbe.probe(token, { fetch: electronLimitsFetch() });
       if (!probeResult.ok) return { ok: false, error: probeResult.error?.message || 'Cursor rejected the token' };
       const accountId = await cursorAuth.runCursorLogin(token);
       const disabled = normalizeCursorDisabledAccountIds(settings.cursorDisabledAccountIds)
@@ -8351,6 +8426,7 @@ app.whenReady().then(() => {
   });
   maybeRunBackgroundUpdateCheck();
   startAppUpdateBackgroundChecks();
+  })();
 });
 
 app.on('second-instance', focusExistingWindow);

@@ -135,7 +135,9 @@ function createCredentialCommands({ getSettings, applySettingsPatch, probeDeps, 
     }
     const remember = accountForm(entry).rememberProbe;
     if (remember && verdict === 'valid') entry.limits[remember.fn](candidate[remember.field], provider);
-    const settings = applySettingsPatch({
+    // Proxy reconfiguration can make the shared settings write asynchronous.
+    // Await it so IPC receives a settings DTO and persistence errors propagate.
+    const settings = await applySettingsPatch({
       ...candidate,
       limitProviders: providerSelectionIncluding(getSettings().limitProviders, entry.id),
       limitsEnabled: true
@@ -143,10 +145,10 @@ function createCredentialCommands({ getSettings, applySettingsPatch, probeDeps, 
     return { saved: true, verdict, status, errorCode, settings };
   }
 
-  function clearCredential(providerId) {
+  async function clearCredential(providerId) {
     const entry = formEntry(providerId);
     if (!entry) return { cleared: false };
-    const settings = applySettingsPatch(Object.fromEntries(
+    const settings = await applySettingsPatch(Object.fromEntries(
       formFields(entry).filter((field) => field.secret).map(({ key }) => [key, ''])
     ));
     return { cleared: true, settings };

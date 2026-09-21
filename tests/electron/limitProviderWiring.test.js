@@ -87,6 +87,7 @@ test('loading the account index or the credential store does not load any provid
 
 test('CREDENTIAL_SETTING_PATHS is exactly this set (the store is default-deny)', () => {
   assert.deepEqual(CREDENTIAL_SETTING_PATHS, {
+    proxyPassword: ['network', 'proxyPassword'],
     hubHostSecret: ['hub', 'hostSecret'],
     secret: ['hub', 'clientSecret'],
     claudeWebCookie: ['providers', 'claude', 'webCookie'],
@@ -123,7 +124,7 @@ test('CREDENTIAL_SETTING_PATHS is exactly this set (the store is default-deny)',
 
 test('every provider credential path lives under providers/<id>', () => {
   for (const [key, segments] of Object.entries(CREDENTIAL_SETTING_PATHS)) {
-    if (key === 'hubHostSecret' || key === 'secret') continue;
+    if (key === 'hubHostSecret' || key === 'secret' || key === 'proxyPassword') continue;
     assert.equal(segments[0], 'providers', key);
     assert.equal(segments.length, 3, key);
   }

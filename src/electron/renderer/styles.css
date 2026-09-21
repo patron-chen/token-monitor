@@ -2791,6 +2791,18 @@ html.is-windows .settings-panel select option {
 .settings-panel textarea:focus { border-color: rgba(115, 189, 245, 0.72); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .settings-actions button { min-height: 30px; padding: 0 10px; border-radius: 8px; font-size: 11px; white-space: nowrap; }
+.proxy-settings { gap: 10px; }
+.proxy-custom-fields { display: grid; gap: 10px; }
+.proxy-auth-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.proxy-auth-fields.is-disabled { opacity: 0.58; }
+.proxy-settings textarea { min-height: 62px; resize: vertical; }
+.proxy-actions { align-items: center; }
+.proxy-status { min-height: 16px; color: var(--muted); font-size: 11px; }
+.proxy-status.is-success { color: var(--success); }
+.proxy-status.is-error { color: var(--red); }
+@media (max-width: 440px) {
+  .proxy-auth-fields { grid-template-columns: 1fr; }
+}
 .refresh-button {
   display: inline-flex;
   align-items: center;
