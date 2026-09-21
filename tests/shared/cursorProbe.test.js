@@ -4,7 +4,19 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
 
-const { parseGrokBotUsage, parseUsageSummary, parseUserInfo, probe } = require('../../src/shared/providers/cursor/probe');
+const { parseGrokBotUsage, parseUsageSummary, parseUserInfo, probe, requestJson } = require('../../src/shared/providers/cursor/probe');
+
+test('requestJson uses an injected fetch transport for proxied Electron requests', async () => {
+  const calls = [];
+  const result = await requestJson('https://cursor.com/api/usage-summary', 'session-token', {
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
+  });
+  assert.deepEqual(result, { ok: true, json: { ok: true } });
+  assert.equal(calls[0].init.headers.Cookie, 'WorkosCursorSessionToken=session-token');
+});
 
 test('parseUsageSummary maps cents to USD and reads billing cycle end', () => {
   const input = {

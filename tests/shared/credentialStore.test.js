@@ -343,3 +343,10 @@ test('stores TypeSafe Console Cookie outside settings and redacts it for the ren
   assert.equal(store.settingsCredentials().typesafeCookie, 'session=secret');
   assert.equal(credentialSettingsForRenderer({ typesafeCookie: 'session=secret' }).typesafeCookie, '');
 });
+
+test('stores the proxy password as a fixed credential and redacts it for renderer settings', (t) => {
+  const store = new CredentialStore(tempDataDir(t));
+  store.replaceSettingsCredentials({ proxyPassword: 'proxy-secret' });
+  assert.equal(store.settingsCredentials().proxyPassword, 'proxy-secret');
+  assert.equal(credentialSettingsForRenderer({ proxyPassword: 'proxy-secret' }).proxyPassword, '');
+});

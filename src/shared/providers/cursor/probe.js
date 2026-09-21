@@ -171,7 +171,43 @@ function parseUserInfo(input) {
   };
 }
 
-function requestJson(url, sessionToken, {
+async function requestJsonWithFetch(url, sessionToken, {
+  timeoutMs = 15000,
+  signal,
+  method = 'GET',
+  headers = {},
+  body = null,
+  fetch: fetchFn
+} = {}) {
+  if (signal?.aborted) return { ok: false, error: { kind: 'network', message: abortError(signal).message } };
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  try {
+    const response = await fetchFn(url, {
+      method,
+      headers: {
+        ...DEFAULT_HEADERS,
+        ...headers,
+        'Cookie': `WorkosCursorSessionToken=${sessionToken}`
+      },
+      ...(body !== null && body !== undefined ? { body: String(body) } : {}),
+      signal: requestSignal
+    });
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, error: { kind: 'unauthorized', message: `HTTP ${response.status}` } };
+    }
+    if (!response.ok) return { ok: false, error: { kind: 'network', message: `HTTP ${response.status}` } };
+    try {
+      return { ok: true, json: await response.json() };
+    } catch (error) {
+      return { ok: false, error: { kind: 'parse', message: error.message } };
+    }
+  } catch (error) {
+    return { ok: false, error: { kind: 'network', message: error.message } };
+  }
+}
+
+function requestJsonWithHttps(url, sessionToken, {
   timeoutMs = 15000,
   httpsLib = https,
   signal,
@@ -239,6 +275,11 @@ function requestJson(url, sessionToken, {
   });
 }
 
+function requestJson(url, sessionToken, options = {}) {
+  if (typeof options.fetch === 'function') return requestJsonWithFetch(url, sessionToken, options);
+  return requestJsonWithHttps(url, sessionToken, options);
+}
+
 async function probe(sessionToken, opts = {}) {
   if (!sessionToken) return { ok: false, error: { kind: 'unauthorized', message: 'no session token' } };
   const configuredTimeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 15000;
@@ -278,6 +319,7 @@ module.exports = {
   parseUserInfo,
   probe,
   requestJson,
+  requestJsonWithFetch,
   USAGE_SUMMARY_URL,
   AUTH_ME_URL,
   REQUEST_USAGE_URL,
