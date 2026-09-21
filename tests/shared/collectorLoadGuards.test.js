@@ -2216,14 +2216,23 @@ test('clientDataDirPresence requires an actual VS Code Copilot chat source', () 
     path.join('Library', 'Application Support', 'Code', 'User', 'workspaceStorage', 'plain-workspace')
   ]);
   const originalHomedir = os.homedir;
+  const originalAppData = process.env.APPDATA;
+  const originalExporter = process.env.COPILOT_OTEL_FILE_EXPORTER_PATH;
   os.homedir = () => tmp;
   try {
+    process.env.APPDATA = path.join(tmp, 'AppData', 'Roaming');
+    delete process.env.COPILOT_OTEL_FILE_EXPORTER_PATH;
     const { clientDataDirPresence } = freshCollector();
-    assert.deepEqual(clientDataDirPresence('copilot'), { copilot: false });
+    const detectionOptions = { homeDir: tmp, env: {}, platform: 'darwin' };
+    assert.deepEqual(clientDataDirPresence('copilot', detectionOptions), { copilot: false });
     fs.mkdirSync(path.join(tmp, 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage', 'copilot-workspace', 'chatSessions'), { recursive: true });
-    assert.deepEqual(clientDataDirPresence('copilot'), { copilot: true });
+    assert.deepEqual(clientDataDirPresence('copilot', detectionOptions), { copilot: true });
   } finally {
     os.homedir = originalHomedir;
+    if (originalAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = originalAppData;
+    if (originalExporter === undefined) delete process.env.COPILOT_OTEL_FILE_EXPORTER_PATH;
+    else process.env.COPILOT_OTEL_FILE_EXPORTER_PATH = originalExporter;
     delete require.cache[collectorPath];
     fs.rmSync(tmp, { recursive: true, force: true });
   }
