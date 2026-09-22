@@ -590,6 +590,7 @@ module.exports = {
   watchSystemDarkUi,
   formatTrayText,
   isBarsTrayIconMode,
+  isGeneratedTrayIconMode,
   pickUsageTrayIconId,
   pickWorstLimit,
   pointInside,
