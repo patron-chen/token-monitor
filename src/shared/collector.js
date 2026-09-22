@@ -3009,9 +3009,13 @@ function startCollector(options) {
   // vars (TOKEN_MONITOR_WATCH_DEBOUNCE_MS, TOKEN_MONITOR_INTERVAL_MS) by way of
   // a bare Number(), so Infinity and past-32-bit values reach us intact — and
   // setTimeout rewrites those to 1ms, turning the debounce's mid-tick re-arm and
-  // the interval loop into spins. Clamping here means no timer below can
-  // reintroduce that by forgetting.
-  const watchDebounceMs = clampTimerDelayMs(options.watchDebounceMs, 1500);
+  function resolveWatchDebounceMs() {
+    const candidate = typeof options.watchDebounceMs === 'function'
+      ? options.watchDebounceMs()
+      : options.watchDebounceMs;
+    return clampTimerDelayMs(candidate, 1500);
+  }
+  const watchDebounceMs = resolveWatchDebounceMs();
   const intervalMs = clampTimerDelayMs(options.intervalMs, 5 * 60 * 1000);
   const historyRetryMs = clampTimerDelayMs(options.historyRetryMs, 60 * 1000);
   const watchUsePolling = resolveWatchUsePolling(options.watchUsePolling);
@@ -3643,7 +3647,7 @@ function startCollector(options) {
         targetClients: takeWatchClients(),
         sourceSelfSync: sourceSyncQueue.takeDue()
       });
-    }, watchDebounceMs);
+    }, resolveWatchDebounceMs());
   }
 
   // chokidar's close() walks every watched entry and closes every fs.watch
