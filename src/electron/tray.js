@@ -533,6 +533,7 @@ module.exports = {
   watchSystemDarkUi,
   formatTrayText,
   isBarsTrayIconMode,
+  isGeneratedTrayIconMode,
   pickUsageTrayIconId,
   pickWorstLimit,
   popoverBounds,
