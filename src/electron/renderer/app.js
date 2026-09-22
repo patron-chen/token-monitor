@@ -6660,6 +6660,10 @@ function renderBreakdownChange(breakdown, options = {}) {
 
 function restartTimer() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
+  if (isRendererWindowHidden()) {
+    state.refreshTimer = null;
+    return;
+  }
   const interval = state.streamConnected
     ? 5 * 60 * 1000
     : Number(state.settings?.refreshMs || 15000);
@@ -11838,6 +11842,15 @@ function handleWindowVisibilityChange() {
   if (!statsRenderScheduler.visibilityChanged()) return;
   if (isRendererWindowHidden()) cancelTokenRateBoost();
   else applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
+  if (isRendererWindowHidden()) {
+    if (state.refreshTimer) {
+      clearInterval(state.refreshTimer);
+      state.refreshTimer = null;
+    }
+  } else {
+    restartTimer();
+    void refreshStats();
+  }
   if (!isRendererWindowHidden() && state.settings?.hubMode === 'client' && hubBuildStatusRefreshDue()) {
     void refreshHubBuildStatus();
   }

@@ -5,6 +5,14 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, screen, session, shell, systemPreferences } = require('electron');
+
+// Configure Chromium and V8 runtime memory switches before app.whenReady()
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128 --expose-gc');
+app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess');
+app.commandLine.appendSwitch('renderer-process-limit', '1');
+
+const { createMemoryTrimmer } = require('./memoryTrimmer');
+const memoryTrimmer = createMemoryTrimmer({ app, platform: process.platform });
 const { autoUpdater } = require('electron-updater');
 const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, readJson, sharedDataDir } = require('../shared/config');
 const {
@@ -286,6 +294,7 @@ const {
   createTray,
   formatTrayText,
   isBarsTrayIconMode,
+  isGeneratedTrayIconMode,
   pickUsageTrayIconId,
   parseWindowsSystemUsesLightTheme,
   popoverBounds,
@@ -784,7 +793,10 @@ function electronUsageConfig(errorPrefix) {
     // by itself; TOKEN_MONITOR_WATCH_POLLING overrides in both directions.
     watchTriggersCollection: collectorWatchTriggersCollection(),
     intervalRequiresActivity: collectorIntervalRequiresActivity(),
-    watchDebounceMs: 1500,
+    watchDebounceMs: () => {
+      const isHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized();
+      return isHidden ? 15000 : 1500;
+    },
     dailyHistoryArchiveWriteEnabled: () => !isExternalAgentActive(),
     onError: (error, reason) => console.log(`[${errorPrefix}] ${reason}: ${error.message}`),
     logger: (message) => console.log(`[${errorPrefix}] ${message}`)
@@ -4374,6 +4386,9 @@ function scheduleMacWidgetSnapshot(stats, producerOwner) {
   return ensureMacWidgetSnapshotController()?.enqueue({ stats, producerOwner }) || false;
 }
 
+let pendingRendererStatsPayload = null;
+let initialStatsDeliveredToRenderer = false;
+
 // Two options, both for the cold-start seed and neither for live stats.
 // `skipExport` keeps a republished snapshot from spending the auto-export
 // interval that this run's first real scan needs. `deferToRenderer` waits for
@@ -4409,7 +4424,16 @@ function sendPush(payload, options = {}) {
     const deferred = payload?.data?.stats;
     sendMainWindowEvent('stats:push', rendererPayload, () => !deferred || latestStats === deferred);
   } else if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
+    const windowVisible = mainWindow.isVisible() && !mainWindow.isMinimized();
+    const needsTrayIcon = isGeneratedTrayIconMode(settings?.trayContent);
+    const shouldSend = !initialStatsDeliveredToRenderer || windowVisible || needsTrayIcon;
+    if (shouldSend) {
+      try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
+      pendingRendererStatsPayload = null;
+      initialStatsDeliveredToRenderer = true;
+    } else {
+      pendingRendererStatsPayload = rendererPayload;
+    }
   }
   if (payload?.data?.stats) {
     const nextHistoryRevision = statsHistoryRevision(payload.data.stats);
@@ -6825,7 +6849,8 @@ function createWindow(boundsOverride, options = {}) {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: true
     }
   });
   mainWindow = win;
@@ -6879,10 +6904,22 @@ function createWindow(boundsOverride, options = {}) {
   });
   win.on('resized', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
   win.on('moved', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
-  win.on('show', syncTaskbarZOrder);
+  win.on('show', () => {
+    syncTaskbarZOrder();
+    if (pendingRendererStatsPayload && !win.isDestroyed()) {
+      try { win.webContents.send('stats:push', pendingRendererStatsPayload); } catch (_) {}
+      pendingRendererStatsPayload = null;
+    }
+  });
   win.on('restore', syncTaskbarZOrder);
-  win.on('hide', stopTaskbarZOrderKeeper);
-  win.on('minimize', stopTaskbarZOrderKeeper);
+  win.on('hide', () => {
+    stopTaskbarZOrderKeeper();
+    memoryTrimmer.scheduleTrim(1200);
+  });
+  win.on('minimize', () => {
+    stopTaskbarZOrderKeeper();
+    memoryTrimmer.scheduleTrim(1200);
+  });
   win.on('close', (event) => {
     if (quitRequested) return;
     const action = mainWindowCloseAction(settings, { platform: process.platform });
@@ -7192,6 +7229,13 @@ app.whenReady().then(() => {
   rateRefreshTimer = setInterval(() => { refreshExchangeRates(); }, 6 * 60 * 60 * 1000);
   syncEdgeDock();
   setTimeout(() => { checkTokscaleNpm({ silent: true }); }, 2000);
+  // Trim startup allocation objects and working set once after stabilization window if running in background
+  setTimeout(() => {
+    const isHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized();
+    if (isHidden) {
+      memoryTrimmer.scheduleTrim(1000);
+    }
+  }, 5000);
   ipcMain.handle('settings:get', () => settingsForRenderer());
   ipcMain.handle('proxy:test', (_event, draft = {}) => aiProxyController.test({
     ...settings,
@@ -8955,6 +8999,7 @@ app.on('before-quit', () => {
   stopTaskbarZOrderKeeper();
   unregisterWindowToggleShortcut();
   edgeDockController?.stop();
+  memoryTrimmer.destroy();
   electronWorkbuddyLocalAuth.dispose();
   if (skipForcedQuit) return;
   performQuit();
