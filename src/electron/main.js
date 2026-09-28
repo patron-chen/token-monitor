@@ -6,6 +6,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, screen, session, shell, systemPreferences } = require('electron');
 
+const { createMemoryLifecycle } = require('./memoryLifecycle');
+const { createRendererStatsGate } = require('./rendererStatsGate');
+const memoryLifecycle = createMemoryLifecycle({ app, platform: process.platform });
 const { autoUpdater } = require('electron-updater');
 const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, readJson, sharedDataDir } = require('../shared/config');
 const {
@@ -298,6 +301,7 @@ const {
   createTray,
   formatTrayText,
   isBarsTrayIconMode,
+  isGeneratedTrayIconMode,
   pickUsageTrayIconId,
   parseWindowsSystemUsesLightTheme,
   popoverBounds,
@@ -4531,6 +4535,14 @@ function scheduleMacWidgetSnapshot(stats, producerOwner) {
   return ensureMacWidgetSnapshotController()?.enqueue({ stats, producerOwner }) || false;
 }
 
+const rendererStatsGate = createRendererStatsGate({
+  send: (payload) => {
+    try { mainWindow?.webContents.send('stats:push', payload); } catch (_) {}
+  },
+  isVisible: () => Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized()),
+  needsTrayIcon: () => isGeneratedTrayIconMode(settings?.trayContent)
+});
+
 // Two options, both for the cold-start seed and neither for live stats.
 // `skipExport` keeps a republished snapshot from spending the auto-export
 // interval that this run's first real scan needs. `deferToRenderer` waits for
@@ -4566,7 +4578,7 @@ function sendPush(payload, options = {}) {
     const deferred = payload?.data?.stats;
     sendMainWindowEvent('stats:push', rendererPayload, () => !deferred || latestStats === deferred);
   } else if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
+    rendererStatsGate.push(rendererPayload);
   }
   if (payload?.data?.stats) {
     const nextHistoryRevision = statsHistoryRevision(payload.data.stats);
@@ -6817,10 +6829,19 @@ function createWindow(boundsOverride, options = {}) {
   });
   win.on('resized', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
   win.on('moved', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
-  win.on('show', syncTaskbarZOrder);
+  win.on('show', () => {
+    syncTaskbarZOrder();
+    if (!win.isDestroyed()) rendererStatsGate.flush();
+  });
   win.on('restore', syncTaskbarZOrder);
-  win.on('hide', stopTaskbarZOrderKeeper);
-  win.on('minimize', stopTaskbarZOrderKeeper);
+  win.on('hide', () => {
+    stopTaskbarZOrderKeeper();
+    memoryLifecycle.trimSoon();
+  });
+  win.on('minimize', () => {
+    stopTaskbarZOrderKeeper();
+    memoryLifecycle.trimSoon();
+  });
   win.on('close', (event) => {
     if (quitRequested) return;
     const action = mainWindowCloseAction(settings, { platform: process.platform });
@@ -7120,6 +7141,7 @@ app.whenReady().then(() => {
   rateRefreshTimer = setInterval(() => { refreshExchangeRates(); }, 6 * 60 * 60 * 1000);
   syncEdgeDock();
   setTimeout(() => { checkTokscaleNpm({ silent: true }); }, 2000);
+  memoryLifecycle.trimAfterStartup(() => mainWindow);
   ipcMain.handle('settings:get', () => settingsForRenderer());
   ipcMain.handle('appearance:getBackgroundImage', () => getBackgroundImage(app.getPath('userData')));
   ipcMain.handle('appearance:chooseBackgroundImage', async () => {
@@ -8802,6 +8824,7 @@ app.on('before-quit', () => {
   stopTaskbarZOrderKeeper();
   unregisterWindowToggleShortcut();
   edgeDockController?.stop();
+  memoryLifecycle.destroy();
   electronWorkbuddyLocalAuth.dispose();
   if (skipForcedQuit) return;
   performQuit();

@@ -152,6 +152,7 @@ const fixedPeriodRangesApi = window.TokenMonitorFixedPeriodRanges;
 const hubBuildPresentationApi = window.TokenMonitorHubBuildPresentation;
 const { limitFillPercent, limitModeSuffix } = window.TokenMonitorLimitDisplayMode;
 const i18n = window.TokenMonitorI18n;
+const visibilityRefreshApi = window.TokenMonitorVisibilityRefresh;
 const currencyApi = window.TokenMonitorCurrency;
 const subscriptionApi = window.TokenMonitorSubscriptionDisplay;
 // What a recorded subscription reads. Shared with the Limits view, which builds
@@ -6848,6 +6849,10 @@ function renderBreakdownChange(breakdown, options = {}) {
 
 function restartTimer() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
+  if (visibilityRefreshApi.isPaused(isRendererWindowHidden())) {
+    state.refreshTimer = null;
+    return;
+  }
   const interval = state.streamConnected
     ? 5 * 60 * 1000
     : Number(state.settings?.refreshMs || 15000);
@@ -12241,6 +12246,15 @@ function handleWindowVisibilityChange() {
   if (!statsRenderScheduler.visibilityChanged()) return;
   if (isRendererWindowHidden()) cancelTokenRateBoost();
   else applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
+  visibilityRefreshApi.sync({
+    hidden: isRendererWindowHidden(),
+    pause: () => {
+      if (state.refreshTimer) clearInterval(state.refreshTimer);
+      state.refreshTimer = null;
+    },
+    startTimer: restartTimer,
+    refreshStats
+  });
   if (!isRendererWindowHidden() && state.settings?.hubMode === 'client' && hubBuildStatusRefreshDue()) {
     void refreshHubBuildStatus();
   }
