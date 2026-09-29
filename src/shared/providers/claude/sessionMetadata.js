@@ -22,6 +22,7 @@ const MAX_METADATA_LINE_BYTES = 64 * 1024;
 // `MAX_METADATA_LINE_BYTES`, which used to drop the boundary riding the same pass.
 const LONG_LINE_HEAD_BYTES = 64 * 1024;
 const LONG_LINE_TAIL_BYTES = 8 * 1024;
+const TITLE_CACHE_LIMIT = 500;
 const titleCache = new Map();
 // Provenance of the winning title in the shared catalog-title ledger.
 const DESKTOP_TITLE_SOURCE = 'claude-desktop';
@@ -583,6 +584,10 @@ function readSessionTitle(filePath, deps = {}) {
     fd = fsApi.openSync(file, 'r');
     scanRange(fd, start, stat.size - start, index, fsApi);
     const title = index.customTitle || index.aiTitle;
+    if (cache.size >= TITLE_CACHE_LIMIT) {
+      const oldestKey = cache.keys().next().value;
+      cache.delete(oldestKey);
+    }
     cache.set(file, {
       ...index,
       identity,
