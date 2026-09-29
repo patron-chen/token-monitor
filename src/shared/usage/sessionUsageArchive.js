@@ -32,7 +32,7 @@ function sessionUsageArchiveDate(deviceRecord, fallback = new Date()) {
 // means normalizing a one-session period. The answer depends on nothing but the
 // two strings, so it is kept; the bound only matters to a process that runs for
 // months without restarting.
-const SESSION_KEY_CACHE_LIMIT = 50000;
+const SESSION_KEY_CACHE_LIMIT = 5000;
 const sessionKeyCache = new Map();
 
 function sessionKey(client, sessionId) {
