@@ -131,7 +131,7 @@ function createRendererSnapshots(options = {}) {
   // projection built from it, alive in main. The renderer pulls only for the
   // snapshot it holds. Keep the current one and two predecessors so a pull can
   // still resolve while newer pushes arrive, without retaining eight trees.
-  const limit = Math.max(1, Number(options.limit) || 3);
+  const limit = Math.max(1, Number(options.limit) || 2);
   const tags = new WeakMap();
   const byId = new Map();
   let nextId = 1;

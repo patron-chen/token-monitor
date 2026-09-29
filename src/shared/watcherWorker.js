@@ -106,6 +106,7 @@ async function pump() {
             if (failed) return;
             if (watcher !== instance || watcherRevision !== target.revision) return;
             post({ type: 'ready', revision: target.revision });
+            try { if (typeof global.gc === 'function') global.gc(); } catch (_) {}
           });
         } catch (error) {
           appliedRevision = target.revision;
