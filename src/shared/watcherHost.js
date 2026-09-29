@@ -57,7 +57,7 @@ class WatcherProcess extends EventEmitter {
       env,
       // The owner's execArgv can carry --inspect or Electron switches; a second
       // process inheriting --inspect would fail to bind the same port.
-      execArgv: [],
+      execArgv: ['--optimize-for-size', '--max-old-space-size=64'],
       stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
       windowsHide: true
     });
@@ -346,6 +346,7 @@ function createWatcherCoordinator(deps = {}) {
 
   return {
     acquire,
+    getWorkerPid: () => worker?.child?.pid || null,
     // Test seam: asserts on which host actually served the last acquire.
     inspect: () => ({
       hasWorker: Boolean(worker),
@@ -370,5 +371,7 @@ module.exports = {
   createInProcessWatcherHost,
   createWatcherCoordinator,
   createWatcherHost,
+  defaultCoordinator,
+  getWatcherWorkerPid: () => defaultCoordinator.getWorkerPid(),
   inProcessRequested
 };
