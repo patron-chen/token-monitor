@@ -183,6 +183,7 @@ function projectIdentity(value) {
 
 // This cache intentionally outlives one collection tick, so idle JSONL
 // sessions do not need to be reopened.
+const JSONL_TIMESTAMP_CACHE_LIMIT = 1000;
 const jsonlTimestampCache = new Map();
 
 function lastJsonlTimestamp(filePath) {
@@ -199,6 +200,10 @@ function lastJsonlTimestamp(filePath) {
     if (timestamp) { value = timestamp; break; }
   }
   if (!value) value = stat.mtime.toISOString();
+  if (jsonlTimestampCache.size >= JSONL_TIMESTAMP_CACHE_LIMIT) {
+    const oldestKey = jsonlTimestampCache.keys().next().value;
+    jsonlTimestampCache.delete(oldestKey);
+  }
   jsonlTimestampCache.set(filePath, { key: cacheKey, value });
   return value;
 }
