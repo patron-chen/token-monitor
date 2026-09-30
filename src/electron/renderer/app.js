@@ -1071,7 +1071,6 @@ function observeLiveTokenRate(stats) {
   }
   const result = liveTokenRateTracker.observe(selection.entries);
   if (!result.changed) return;
-  if (isRendererWindowHidden()) return;
   scheduleLiveTokenRateExpiry();
   renderLiveTokenRate();
 }
@@ -12208,15 +12207,13 @@ const allTimeSessions = allTimeSessionsApi.createAllTimeSessionsLoader({
 });
 function handleWindowVisibilityChange() {
   if (!statsRenderScheduler.visibilityChanged()) return;
+  if (isRendererWindowHidden()) cancelTokenRateBoost();
+  else applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
   if (isRendererWindowHidden()) {
-    cancelTokenRateBoost();
     clearLiveTokenRateTimers();
     stopRefreshTimer();
   } else {
-    applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
-    renderLiveTokenRate();
     restartTimer();
-    void refreshStats();
   }
   if (!isRendererWindowHidden() && state.settings?.hubMode === 'client' && hubBuildStatusRefreshDue()) {
     void refreshHubBuildStatus();
