@@ -1213,7 +1213,6 @@ function observeLiveTokenRate(stats) {
   }
   const result = liveTokenRateTracker.observe(selection.entries);
   if (!result.changed) return;
-  if (isRendererWindowHidden()) return;
   scheduleLiveTokenRateExpiry();
   renderLiveTokenRate();
 }
@@ -1228,7 +1227,7 @@ function formatLiveTokenRate(value) {
 }
 
 function renderLiveTokenRate() {
-  if (isRendererWindowHidden()) return;
+  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden()) return;
   if (!els.liveTokenRate || !els.liveTokenRateValue) return;
   const enabled = state.settings?.showLiveTokenRate === true;
   if (!enabled) {
@@ -7949,7 +7948,7 @@ function settleRefreshButtonState(status) {
 
 async function refreshStats(options = {}) {
   const feedback = options.feedback === true;
-  if (isRendererWindowHidden() && !feedback) return;
+  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden() && !feedback) return;
   if (feedback) {
     if (state.refreshBusy) return;
     state.refreshBusy = true;
@@ -8084,8 +8083,13 @@ function stopRefreshTimer() {
 }
 
 function restartTimer() {
-  stopRefreshTimer();
-  if (isRendererWindowHidden()) return;
+  if (typeof stopRefreshTimer === 'function') {
+    stopRefreshTimer();
+  } else if (state.refreshTimer) {
+    clearInterval(state.refreshTimer);
+    state.refreshTimer = null;
+  }
+  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden()) return;
   const interval = state.streamConnected
     ? 5 * 60 * 1000
     : Number(state.settings?.refreshMs || 15000);
@@ -14850,15 +14854,13 @@ function handleWindowVisibilityChange() {
   pluginViewHost?.refreshDemand();
   if (els.syncPanelSignal) els.syncPanelSignal.dataset.windowHidden = String(isRendererWindowHidden());
   if (!statsRenderScheduler.visibilityChanged()) return;
+  if (isRendererWindowHidden()) cancelTokenRateBoost();
+  else applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
   if (isRendererWindowHidden()) {
-    cancelTokenRateBoost();
     clearLiveTokenRateTimers();
     stopRefreshTimer();
   } else {
-    applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
-    renderLiveTokenRate();
     restartTimer();
-    void refreshStats();
   }
   if (!isRendererWindowHidden() && state.settings?.hubMode === 'client' && hubBuildStatusRefreshDue()) {
     void refreshHubBuildStatus();
