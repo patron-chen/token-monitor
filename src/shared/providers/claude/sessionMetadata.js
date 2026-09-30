@@ -534,7 +534,11 @@ function readSessionTitle(filePath, deps = {}) {
       && cached.identity === identity
       && cached.size === stat.size
       && cached.mtimeMs === stat.mtimeMs
-    ) return cached.title;
+    ) {
+      cache.delete(file);
+      cache.set(file, cached);
+      return cached.title;
+    }
 
     const appendOnly = cached
       && cached.identity === identity
@@ -564,6 +568,7 @@ function readSessionTitle(filePath, deps = {}) {
     fd = fsApi.openSync(file, 'r');
     scanRange(fd, start, stat.size - start, index, fsApi);
     const title = index.customTitle || index.aiTitle;
+    cache.delete(file);
     if (cache.size >= TITLE_CACHE_LIMIT) {
       const oldestKey = cache.keys().next().value;
       cache.delete(oldestKey);
