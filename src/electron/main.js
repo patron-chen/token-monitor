@@ -4986,26 +4986,59 @@ function publishLocalSessionActivity(patch) {
   sendPush({ event: 'session-activity', data: { patch: visiblePatch, snapshot } });
 }
 
-// Two options, both for the cold-start seed and neither for live stats.
 let deferredMainWindowStatsPayload = null;
+let deferredMainWindowStatusPayload = null;
 
 function isMainWindowActivelyVisible() {
-  return Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized());
+  return Boolean(
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    (typeof mainWindow.isVisible !== 'function' || mainWindow.isVisible()) &&
+    (typeof mainWindow.isMinimized !== 'function' || !mainWindow.isMinimized())
+  );
+}
+
+function shouldPerformBackgroundMemoryTrim() {
+  if (isMainWindowActivelyVisible()) return false;
+  if (dashboardWindow && !dashboardWindow.isDestroyed() && dashboardWindow.isVisible() && !dashboardWindow.isMinimized()) {
+    return false;
+  }
+  if (edgeDockController?.isRunning()) return false;
+  return true;
 }
 
 function flushDeferredStatsToMainWindow(win = mainWindow) {
-  if (deferredMainWindowStatsPayload && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  if (deferredMainWindowStatusPayload) {
+    try { win.webContents.send('stats:push', deferredMainWindowStatusPayload); } catch (_) {}
+    deferredMainWindowStatusPayload = null;
+  }
+  if (deferredMainWindowStatsPayload) {
     try { win.webContents.send('stats:push', deferredMainWindowStatsPayload); } catch (_) {}
     deferredMainWindowStatsPayload = null;
   }
 }
 
-function scheduleBackgroundMemoryTrim(delayMs = 3000) {
+function getActiveWatcherPid() {
+  try {
+    const pid = latestUsageHost?.getWatcherPid?.();
+    if (pid) return pid;
+  } catch (_) {}
+  try {
+    return getWatcherWorkerPid?.() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function scheduleBackgroundMemoryTrim(delayMs = 10000) {
+  if (typeof memoryOptimizer === 'undefined' || !shouldPerformBackgroundMemoryTrim()) return;
   memoryOptimizer.scheduleTrim(() => {
+    if (!shouldPerformBackgroundMemoryTrim()) return [];
     const pids = [];
     try {
       if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
-        const rendererPid = mainWindow.webContents.getOSProcessId();
+        const rendererPid = typeof mainWindow.webContents.getOSProcessId === 'function' ? mainWindow.webContents.getOSProcessId() : null;
         if (rendererPid) pids.push(rendererPid);
       }
     } catch (_) {}
@@ -5018,7 +5051,7 @@ function scheduleBackgroundMemoryTrim(delayMs = 3000) {
       }
     } catch (_) {}
     try {
-      const watcherPid = getWatcherWorkerPid?.();
+      const watcherPid = getActiveWatcherPid();
       if (watcherPid && !pids.includes(watcherPid)) pids.push(watcherPid);
     } catch (_) {}
     return pids;
@@ -5029,13 +5062,14 @@ let backgroundTrimTicker = null;
 function ensureBackgroundTrimTicker() {
   if (backgroundTrimTicker) return;
   backgroundTrimTicker = setInterval(() => {
-    if (!isMainWindowActivelyVisible()) {
+    if (shouldPerformBackgroundMemoryTrim()) {
       scheduleBackgroundMemoryTrim(1000);
     }
-  }, 120000);
+  }, 300000);
   backgroundTrimTicker.unref?.();
 }
 
+// Two options, both for the cold-start seed and neither for live stats.
 // `skipExport` keeps a republished snapshot from spending the auto-export
 // interval that this run's first real scan needs. `deferToRenderer` waits for
 // the renderer to finish loading, and is deliberately not the default: a live
@@ -5079,11 +5113,17 @@ function sendPush(payload, options = {}) {
     // walk the numbers backwards until the next push.
     const deferred = payload?.data?.stats;
     sendMainWindowEvent('stats:push', rendererPayload, () => !deferred || latestStats === deferred);
-  } else if (isMainWindowActivelyVisible()) {
-    try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
-  } else {
-    deferredMainWindowStatsPayload = rendererPayload;
-    scheduleBackgroundMemoryTrim(5000);
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    const isActivelyVisible = (typeof isMainWindowActivelyVisible === 'function')
+      ? isMainWindowActivelyVisible()
+      : true;
+    if (isActivelyVisible) {
+      try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
+    } else if (payload?.event === 'status') {
+      deferredMainWindowStatusPayload = rendererPayload;
+    } else {
+      deferredMainWindowStatsPayload = rendererPayload;
+    }
   }
   if (payload?.data?.stats) {
     const nextHistoryRevision = statsHistoryRevision(payload.data.stats);
@@ -6304,13 +6344,15 @@ function refreshLimitStatsPresentation() {
       event: 'stats',
       data: { type: 'stats', reason: 'presentation', mode, stats: rendererSnapshots.stamp(latestStats, rendererStats(visibleStats)) }
     };
-    if (isMainWindowActivelyVisible()) {
+    const isActivelyVisible = (typeof isMainWindowActivelyVisible === 'function')
+      ? isMainWindowActivelyVisible()
+      : true;
+    if (isActivelyVisible) {
       try {
         mainWindow.webContents.send('stats:push', payload);
       } catch (_) {}
     } else {
       deferredMainWindowStatsPayload = payload;
-      scheduleBackgroundMemoryTrim(5000);
     }
   }
 }
@@ -7693,22 +7735,18 @@ function createWindow(boundsOverride, options = {}) {
   });
   win.on('show', () => {
     memoryOptimizer.cancelScheduledTrim();
-    syncPluginWindowVisibility(win);
     flushDeferredStatsToMainWindow(win);
   });
-  win.on('hide', () => {
-    syncPluginWindowVisibility(win);
-    scheduleBackgroundMemoryTrim();
-  });
-  win.on('minimize', () => {
-    syncPluginWindowVisibility(win);
-    scheduleBackgroundMemoryTrim();
-  });
+  win.on('hide', () => scheduleBackgroundMemoryTrim());
+  win.on('minimize', () => scheduleBackgroundMemoryTrim());
   win.on('restore', () => {
     memoryOptimizer.cancelScheduledTrim();
-    syncPluginWindowVisibility(win);
     flushDeferredStatsToMainWindow(win);
   });
+  win.on('show', () => syncPluginWindowVisibility(win));
+  win.on('hide', () => syncPluginWindowVisibility(win));
+  win.on('minimize', () => syncPluginWindowVisibility(win));
+  win.on('restore', () => syncPluginWindowVisibility(win));
   win.webContents.on('did-finish-load', () => {
     sendFloatingBubbleState();
     // Only report a window that is already on screen. A window still awaiting its
@@ -7973,7 +8011,7 @@ app.whenReady().then(() => {
   ensureBackgroundTrimTicker();
   if (settings.trayMode) {
     enterTrayMode();
-    scheduleBackgroundMemoryTrim(6000);
+    scheduleBackgroundMemoryTrim(10000);
   }
   regenerateTokscalePricing();
   if (widgetRuntimeSupported) ensureMacWidgetDemand();
