@@ -193,7 +193,11 @@ function lastJsonlTimestamp(filePath) {
   try { stat = fs.statSync(filePath); } catch (_) { return ''; }
   const cacheKey = `${stat.size}:${stat.mtimeMs}`;
   const cached = jsonlTimestampCache.get(filePath);
-  if (cached?.key === cacheKey) return cached.value;
+  if (cached?.key === cacheKey) {
+    jsonlTimestampCache.delete(filePath);
+    jsonlTimestampCache.set(filePath, cached);
+    return cached.value;
+  }
   const tail = readFileTail(filePath);
   const lines = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   let value = '';
@@ -202,6 +206,7 @@ function lastJsonlTimestamp(filePath) {
     if (timestamp) { value = timestamp; break; }
   }
   if (!value) value = stat.mtime.toISOString();
+  jsonlTimestampCache.delete(filePath);
   if (jsonlTimestampCache.size >= JSONL_TIMESTAMP_CACHE_LIMIT) {
     const oldestKey = jsonlTimestampCache.keys().next().value;
     jsonlTimestampCache.delete(oldestKey);

@@ -19,6 +19,8 @@ const { createSessionUsageArchiveStore } = require('./sessionUsageArchiveStore')
 const { trackLiveSubprocesses } = require('../subprocessTermination');
 const { createUsageTransform } = require('./usageTransform');
 
+const { getWatcherWorkerPid } = require('../watcherHost');
+
 const config = workerData || {};
 // Lists this thread's subprocesses where the owner can signal them if the
 // process exits before this thread handles its stop.
@@ -35,7 +37,11 @@ function post(message) {
 // Attached to every message so the owner's synchronous getDiagnostics() can
 // answer from the latest state this thread reported.
 function diagnostics() {
-  try { return collector?.getDiagnostics() ?? null; } catch (_) { return null; }
+  try {
+    const diag = collector?.getDiagnostics() ?? null;
+    const watcherPid = getWatcherWorkerPid?.() || null;
+    return diag ? { ...diag, watcherPid } : (watcherPid ? { watcherPid } : null);
+  } catch (_) { return null; }
 }
 
 const transform = createUsageTransform({

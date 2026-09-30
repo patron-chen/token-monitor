@@ -57,7 +57,7 @@ class WatcherProcess extends EventEmitter {
       env,
       // The owner's execArgv can carry --inspect or Electron switches; a second
       // process inheriting --inspect would fail to bind the same port.
-      execArgv: ['--optimize-for-size', '--max-old-space-size=64'],
+      execArgv: ['--optimize-for-size', '--max-old-space-size=128', '--expose-gc'],
       stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
       windowsHide: true
     });
