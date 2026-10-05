@@ -32,6 +32,8 @@ When first enabling aliases or prices, choose the current server settings or pub
 
 The `⇧` button in the title bar cycles the window behavior.
 
+Windows portable builds can **Check for updates** through GitHub's public release page without installer metadata. Update checks follow the system proxy or explicit proxy environment. Portable builds offer the release page for manual downloads rather than automatic installation.
+
 ---
 
 ## Headless agent & hub (`.env`)

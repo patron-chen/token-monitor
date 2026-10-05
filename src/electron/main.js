@@ -6517,7 +6517,12 @@ function configureNativeAppUpdater() {
 }
 
 async function checkAppUpdateProvider() {
-  if (!app.isPackaged) return checkLatestRelease(app.getVersion());
+  const installSupport = appUpdateInstallSupport({ isPackaged: app.isPackaged, platform: process.platform, env: process.env });
+  // Portable builds have no app-update.yml; query the public release through
+  // the existing system transport instead of the installer updater.
+  if (!installSupport.supported) {
+    return checkLatestRelease(app.getVersion(), { fetch: createElectronLimitsFetch({ net }) });
+  }
   const checkedAt = new Date().toISOString();
   configureNativeAppUpdater();
   const result = await autoUpdater.checkForUpdates();

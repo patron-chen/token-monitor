@@ -589,11 +589,11 @@ async function withTimeout(ms, task) {
   }
 }
 
-async function checkLatestRelease(currentVersion) {
+async function checkLatestRelease(currentVersion, { fetch: fetchImpl = globalThis.fetch } = {}) {
   const checkedAt = new Date().toISOString();
   try {
     const payload = await withTimeout(REQUEST_TIMEOUT_MS, async (signal) => {
-      const response = await fetch(RELEASES_LATEST_URL, {
+      const response = await fetchImpl(RELEASES_LATEST_URL, {
         signal,
         headers: {
           // GitHub's public web route returns release JSON through content negotiation.

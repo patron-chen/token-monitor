@@ -12,6 +12,7 @@
 - **Multi-device Sync settings:** Shows connection health, upload times and device details, with connection editing and offline-device removal in one place. (#931)
 
 ### Fixed
+- **Windows portable update checks:** Reads the public GitHub release without requiring installer metadata and honors the system proxy.
 - **Custom model pricing:** Applies custom rates over reported costs and refreshes matching historical costs after price changes. (#938, #933)
 - **Claude Code costs:** Uses the 1-hour cache-write rate for 1-hour cache writes. (#933)
 - **Codex session titles:** Reads titles from T3 Code V2. (#937)
@@ -72,6 +73,7 @@ Tokscale is bundled with this app and updated through Token Monitor releases. Se
 - **多设备同步设置：** 显示连接状态、上传时间和设备详情，并集中提供连接编辑与离线设备移除操作。（#931）
 
 ### 修复
+- **Windows 便携版更新检查：** 直接查询 GitHub 公开 Release，无需安装版更新元数据，并遵循系统代理。
 - **自定义模型单价：** 优先使用自定义单价计算费用，修改后更新对应的历史费用。（#938、#933）
 - **Claude Code 费用：** 1 小时缓存写入按对应单价计费。（#933）
 - **Codex 会话标题：** 正确读取 T3 Code V2 中的标题。（#937）
@@ -146,6 +148,7 @@ Tokscale 已随应用内置，并通过 Token Monitor 发布版本更新。你�
 - **多裝置同步設定：** 顯示連線狀態、上傳時間與裝置詳情，並集中提供連線編輯與離線裝置移除操作。（#931）
 
 ### 修復
+- **Windows 可攜版更新檢查：** 直接查詢 GitHub 公開 Release，無需安裝版更新中繼資料，並遵循系統代理。
 - **自訂模型單價：** 優先使用自訂單價計算費用，修改後更新對應的歷史費用。（#938、#933）
 - **Claude Code 費用：** 1 小時快取寫入按對應單價計費。（#933）
 - **Codex 會話標題：** 正確讀取 T3 Code V2 中的標題。（#937）
@@ -184,6 +187,7 @@ Tokscale 已随应用内置，并通过 Token Monitor 发布版本更新。你�
 - **다중 기기 동기화 설정:** 연결 상태, 업로드 시각과 기기 정보를 표시하고, 연결 편집과 오프라인 기기 제거를 한곳에서 제공합니다. (#931)
 
 ### 수정
+- **Windows 포터블 업데이트 확인:** 설치 프로그램 메타데이터 없이 GitHub 공개 릴리스를 조회하고 시스템 프록시를 따릅니다.
 - **사용자 지정 모델 가격:** 보고된 비용보다 사용자 지정 단가를 우선 적용하고, 가격 변경 후 해당 과거 비용을 갱신합니다. (#938, #933)
 - **Claude Code 비용:** 1시간 캐시 쓰기에 해당 단가를 적용합니다. (#933)
 - **Codex 세션 제목:** T3 Code V2의 제목을 올바르게 읽습니다. (#937)
@@ -222,6 +226,7 @@ Tokscale 已随应用内置，并通过 Token Monitor 发布版本更新。你�
 - **マルチデバイス同期設定：** 接続状態、アップロード時刻、デバイス情報を表示し、接続の編集とオフラインデバイスの削除を一か所にまとめました。 (#931)
 
 ### 修正
+- **Windows ポータブル版の更新確認:** インストーラーのメタデータなしで GitHub の公開リリースを確認し、システムプロキシを使用します。
 - **カスタムモデル単価：** 報告された費用よりカスタム単価を優先し、単価の変更後に該当する過去の費用を更新します。 (#938, #933)
 - **Claude Code の費用：** 1時間のキャッシュ書き込みに対応する単価を適用します。 (#933)
 - **Codex セッションタイトル：** T3 Code V2 のタイトルを正しく読み取ります。 (#937)

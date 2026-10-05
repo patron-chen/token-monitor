@@ -82,6 +82,18 @@ test('source-mode release checks classify public endpoint throttling', async () 
   }
 });
 
+test('release checks use the injected runtime transport instead of global fetch', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('Global fetch must not run'); });
+  const result = await checkLatestRelease('0.66.0', { fetch: async (url, options) => {
+    assert.equal(url, RELEASES_LATEST_URL);
+    assert.equal(options.headers.accept, 'application/json');
+    assert.ok(options.signal instanceof AbortSignal);
+    return { ok: true, json: async () => ({ tag_name: 'v0.67.0' }) };
+  } });
+  assert.equal(result.ok, true);
+  assert.equal(result.newer, true);
+});
+
 test('parseTag strips a leading v from valid semver tags', () => {
   assert.equal(parseTag('v1.2.3'), '1.2.3');
   assert.equal(parseTag('V0.1.0'), '0.1.0');

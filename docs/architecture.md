@@ -86,6 +86,8 @@ The widget runs the collector, the usage transform (`src/shared/usage/usageTrans
 
 `src/electron/limits/fetch.js` chooses the transport at the runtime boundary: `src/shared/outboundFetch.js` when a proxy env is set, Electron's `net.fetch` otherwise, so the OS proxy applies without setup. The collector and the account-settings probes both take it.
 
+Update checks use `electron-updater` only on targets that support installing updates. Windows portable, source runs and non-AppImage Linux builds query the public GitHub Release JSON through the existing system transport (OS proxy or explicit proxy environment). These builds do not require `app-update.yml` and keep installation disabled.
+
 - `probeLimitProvider` injects a resolved `fetch` and `createOutboundFetch` returns an injected one untouched, so a provider's own env-proxy call is dead unless its lane builds its own deps. A probe with its own transport (`node:https`, `claudeWebFetch`, a spawned CLI) inherits none of this and its note must say so.
 - Chromium is not undici: never send a `Host` header (the request is rejected), keep `credentials: 'omit'` so the session cookie jar cannot shadow a provider-managed `Cookie`, and expect a cross-origin `Referer` with a path to be cancelled unless the provider sets a looser `referrerPolicy`.
 
