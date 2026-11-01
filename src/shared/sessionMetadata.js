@@ -145,7 +145,17 @@ function applyTokscaleSessionMetadata(json, { resolveProjects = true } = {}) {
   return result;
 }
 
+const PROJECT_PATH_CACHE_LIMIT = 1000;
 const projectPathCache = new Map();
+
+function setProjectPathCache(filePath, entry) {
+  projectPathCache.delete(filePath);
+  if (projectPathCache.size >= PROJECT_PATH_CACHE_LIMIT) {
+    const oldestKey = projectPathCache.keys().next().value;
+    projectPathCache.delete(oldestKey);
+  }
+  projectPathCache.set(filePath, entry);
+}
 
 function projectPathFromJsonl(filePath) {
   let text;
@@ -154,7 +164,11 @@ function projectPathFromJsonl(filePath) {
     const stat = fs.statSync(filePath);
     cacheKey = `${stat.size}:${stat.mtimeMs}`;
     const cached = projectPathCache.get(filePath);
-    if (cached?.key === cacheKey) return cached.value;
+    if (cached?.key === cacheKey) {
+      projectPathCache.delete(filePath);
+      projectPathCache.set(filePath, cached);
+      return cached.value;
+    }
     if (isCompressedCodexTranscript(filePath)) {
       text = readCompressedCodexTranscript(filePath).subarray(0, 256 * 1024).toString('utf8');
     } else {
@@ -175,12 +189,12 @@ function projectPathFromJsonl(filePath) {
       const value = payload.cwd || payload.project_path || payload.projectPath || payload.workingDirectory || payload.working_directory;
       if (typeof value === 'string' && value.trim()) {
         const result = value.trim();
-        projectPathCache.set(filePath, { key: cacheKey, value: result });
+        setProjectPathCache(filePath, { key: cacheKey, value: result });
         return result;
       }
     } catch (_) { /* skip partial or non-JSON lines */ }
   }
-  projectPathCache.set(filePath, { key: cacheKey, value: '' });
+  setProjectPathCache(filePath, { key: cacheKey, value: '' });
   return '';
 }
 
