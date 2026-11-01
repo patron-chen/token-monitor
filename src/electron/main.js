@@ -6,6 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { contentSecurityPolicyForRequest } = require('./contentSecurityPolicy');
 const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, powerMonitor, protocol, screen, session, shell, systemPreferences } = require('electron');
+
+// Configure Chromium and V8 runtime memory switches before app.whenReady()
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128 --expose-gc');
+app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess');
+app.commandLine.appendSwitch('renderer-process-limit', '1');
 const { autoUpdater } = require('electron-updater');
 const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, readJson, sharedDataDir } = require('../shared/config');
 const {
@@ -910,7 +915,10 @@ function electronUsageConfig(errorPrefix) {
     // by itself; TOKEN_MONITOR_WATCH_POLLING overrides in both directions.
     watchTriggersCollection: collectorWatchTriggersCollection(),
     intervalRequiresActivity: collectorIntervalRequiresActivity(),
-    watchDebounceMs: 1500,
+    watchDebounceMs: () => {
+      const isHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized();
+      return isHidden ? 15000 : 1500;
+    },
     dailyHistoryArchiveWriteEnabled: () => !isExternalAgentActive(),
     onError: (error, reason) => console.log(`[${errorPrefix}] ${reason}: ${error.message}`),
     logger: (message) => console.log(`[${errorPrefix}] ${message}`)
@@ -5082,7 +5090,7 @@ function getActiveWatcherPid() {
   }
 }
 
-function scheduleBackgroundMemoryTrim(delayMs = 10000) {
+function scheduleBackgroundMemoryTrim(delayMs = 1500, force = false) {
   if (typeof memoryOptimizer === 'undefined' || !shouldPerformBackgroundMemoryTrim()) return;
   memoryOptimizer.scheduleTrim(() => {
     if (!shouldPerformBackgroundMemoryTrim()) return [];
@@ -5106,7 +5114,7 @@ function scheduleBackgroundMemoryTrim(delayMs = 10000) {
       if (watcherPid && !pids.includes(watcherPid)) pids.push(watcherPid);
     } catch (_) {}
     return pids;
-  }, delayMs);
+  }, delayMs, force);
 }
 
 let backgroundTrimTicker = null;
@@ -7714,7 +7722,8 @@ function createWindow(boundsOverride, options = {}) {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: true
     }
   });
   mainWindow = win;
@@ -7805,8 +7814,8 @@ function createWindow(boundsOverride, options = {}) {
     memoryOptimizer.cancelScheduledTrim();
     flushDeferredStatsToMainWindow(win);
   });
-  win.on('hide', () => scheduleBackgroundMemoryTrim());
-  win.on('minimize', () => scheduleBackgroundMemoryTrim());
+  win.on('hide', () => scheduleBackgroundMemoryTrim(1500, true));
+  win.on('minimize', () => scheduleBackgroundMemoryTrim(1500, true));
   win.on('restore', () => {
     memoryOptimizer.cancelScheduledTrim();
     flushDeferredStatsToMainWindow(win);
@@ -7909,7 +7918,8 @@ function createDashboardWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: true
     }
   });
   dashboardWindow = win;
@@ -8080,7 +8090,7 @@ app.whenReady().then(() => {
   ensureBackgroundTrimTicker();
   if (settings.trayMode) {
     enterTrayMode();
-    scheduleBackgroundMemoryTrim(10000);
+    scheduleBackgroundMemoryTrim(5000, true);
   }
   regenerateTokscalePricing();
   if (widgetRuntimeSupported) ensureMacWidgetDemand();
