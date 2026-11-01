@@ -48,7 +48,7 @@ function createMemoryOptimizer(options = {}) {
 
   let trimTimer = null;
   let lastTrimAt = 0;
-  const MIN_TRIM_INTERVAL_MS = options.minTrimIntervalMs ?? 15000;
+  const MIN_TRIM_INTERVAL_MS = options.minTrimIntervalMs ?? 5000;
 
   function trimProcess(pid) {
     if (typeof trimFn === 'function') {
@@ -72,10 +72,10 @@ function createMemoryOptimizer(options = {}) {
     }
   }
 
-  function scheduleTrim(getPids, delayMs = 3000) {
+  function scheduleTrim(getPids, delayMs = 1500, force = false) {
     if (trimTimer) clearTimeout(trimTimer);
     const elapsed = Date.now() - lastTrimAt;
-    const remainingCooldown = Math.max(0, MIN_TRIM_INTERVAL_MS - elapsed);
+    const remainingCooldown = force ? 0 : Math.max(0, MIN_TRIM_INTERVAL_MS - elapsed);
     const wait = Math.max(delayMs, remainingCooldown);
     trimTimer = setTimeout(() => {
       trimTimer = null;

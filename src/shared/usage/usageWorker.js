@@ -96,6 +96,11 @@ function transformed(type, summary, reason) {
   const visible = transform.transform(summary, reason, { preview: type === 'preview' });
   post({ type, summary: visible, reason, archive: transform.getState(), diagnostics: diagnostics() });
   collectDeadHeap();
+  try {
+    if (typeof global.gc === 'function') {
+      global.gc();
+    }
+  } catch (_) {}
   return visible;
 }
 
