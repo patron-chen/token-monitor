@@ -247,7 +247,10 @@ function createUsageHostCoordinator(deps = {}) {
       }
       let spawned;
       try {
-        spawned = new WorkerClass(workerPath, { workerData });
+        spawned = new WorkerClass(workerPath, {
+          workerData,
+          execArgv: ['--optimize-for-size', '--max-old-space-size=64', '--expose-gc']
+        });
       } catch (error) {
         fallBack(error);
         resolveExit();
