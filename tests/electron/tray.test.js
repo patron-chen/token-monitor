@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 const zlib = require('node:zlib');
+const { normalizeCurrency } = require('../../src/shared/currency');
 
 const {
   buildTrayIcon,
@@ -92,14 +94,146 @@ function trayCalls() {
   };
 }
 
-test('system tray has no native tooltip on any platform', () => {
-  for (const platform of ['darwin', 'win32', 'linux']) {
+test('only the Windows system tray has an initial native tooltip', () =>
+{
+  for (const [platform, tooltip] of [['darwin', ''], ['win32', 'Token Monitor'], ['linux', '']])
+  {
     const calls = trayCalls();
     const electron = fakeTrayElectron(calls);
     electron.nativeImage.createFromPath = () => ({ resize: () => ({ setTemplateImage() {} }) });
     createTray({ electron, platform });
-    assert.deepEqual(calls.tooltips, [''], platform);
+    assert.deepEqual(calls.tooltips, [tooltip], platform);
   }
+});
+
+function trayDisplayFixture(platform = 'win32')
+{
+  const source = fs.readFileSync(path.join(__dirname, '../../src/electron/main.js'), 'utf8');
+  const calls = { tooltips: [], titles: [], images: [] };
+  const context = {
+    process: { platform },
+    settings: { trayContent: 'tokens', currency: 'USD', language: 'en' },
+    latestStats: {
+      periods: {
+        today: { totalTokens: 12_000, costUsd: 1 },
+        allTime: { totalTokens: 90_000_000, costUsd: 500 }
+      },
+      limits: {
+        providers: [{
+          provider: 'codex', status: 'ok',
+          windows: [{ kind: 'session', remainingPercent: 80 }]
+        }]
+      }
+    },
+    tray: {
+      destroyed: false,
+      isDestroyed()
+      {
+        return this.destroyed;
+      },
+      setToolTip: value => calls.tooltips.push(value),
+      setTitle: value => calls.titles.push(value),
+      setImage: value => calls.images.push(value)
+    },
+    electronPresentationStats: stats => stats,
+    trayMenuLocale: () => context.settings.language,
+    normalizeCurrency,
+    formatTrayText,
+    isBarsTrayIconMode,
+    trayShowsTitle,
+    pickUsageTrayIconId,
+    providerTrayIcons: {
+      bars: 'bars', barsSession: 'session', barsWeekly: 'weekly',
+      barsAllSessions: 'sessions', limitsAllSessions: 'limits',
+      custom: 'custom', liveTokenRate: 'rate'
+    },
+    getDefaultTrayIcon: () => 'default'
+  };
+  vm.runInNewContext([
+    source.slice(source.indexOf('function compactTokenDisplayOptions('), source.indexOf('function updateDiscordRpcDisplay(')),
+    source.slice(source.indexOf('function refreshTrayContextMenu('), source.indexOf('function recordDiagnosticEvent('))
+  ].join('\n'), context);
+  return { context, calls };
+}
+
+test('Windows tray hover shows presented Today totals in every content mode', () =>
+{
+  const { context, calls } = trayDisplayFixture();
+  const presentedStats = context.latestStats;
+  context.latestStats = { periods: { today: { totalTokens: 999_000_000, costUsd: 999 } } };
+  context.electronPresentationStats = stats =>
+  {
+    assert.equal(stats, context.latestStats);
+    return presentedStats;
+  };
+  const modes = [
+    'tokens', 'cost', 'both', 'tokensAll', 'costAll', 'bothAll',
+    'limitsAllSessions', 'liveTokenRate', 'bars', 'barsSession',
+    'barsWeekly', 'barsAllSessions', 'icon', 'custom'
+  ];
+  for (const mode of modes)
+  {
+    context.settings.trayContent = mode;
+    context.updateTrayDisplay();
+    assert.equal(calls.tooltips.at(-1), 'Token Monitor - 12.0K · $1.0000', mode);
+  }
+  assert.deepEqual(calls.titles, []);
+});
+
+test('Windows tray hover refreshes totals, currency and localized token units', () =>
+{
+  const { context, calls } = trayDisplayFixture();
+  context.updateTrayDisplay();
+  context.latestStats.periods.today = { totalTokens: 34_000, costUsd: 2 };
+  context.updateTrayDisplay();
+  context.settings.currency = 'HKD';
+  context.updateTrayDisplay();
+  context.settings.compactTokenUnits = 'localized';
+  context.settings.language = 'zh-TW';
+  context.updateTrayDisplay();
+  assert.deepEqual(calls.tooltips, [
+    'Token Monitor - 12.0K · $1.0000',
+    'Token Monitor - 34.0K · $2.0000',
+    'Token Monitor - 34.0K · HK$15.60',
+    'Token Monitor - 3.4萬 · HK$15.60'
+  ]);
+});
+
+test('Windows tray hover handles zero usage and missing startup stats', () =>
+{
+  const { context, calls } = trayDisplayFixture();
+  context.latestStats.periods.today = { totalTokens: 0, costUsd: 0 };
+  context.updateTrayDisplay();
+  context.latestStats = null;
+  context.updateTrayDisplay();
+  assert.deepEqual(calls.tooltips, [
+    'Token Monitor - 0 · $0.0000',
+    'Token Monitor - 0 · $0.0000'
+  ]);
+});
+
+test('macOS and Linux tray updates keep native tooltips disabled', () =>
+{
+  for (const platform of ['darwin', 'linux'])
+  {
+    const { context, calls } = trayDisplayFixture(platform);
+    context.updateTrayDisplay();
+    assert.deepEqual(calls.tooltips, [''], platform);
+    assert.deepEqual(calls.titles, platform === 'darwin' ? ['12.0K'] : [], platform);
+  }
+});
+
+test('tray display skips updates when the icon is absent or destroyed', () =>
+{
+  const { context, calls } = trayDisplayFixture();
+  const tray = context.tray;
+  context.electronPresentationStats = () => assert.fail('stats must not be projected without a live tray');
+  context.tray = null;
+  context.updateTrayDisplay();
+  context.tray = tray;
+  tray.destroyed = true;
+  context.updateTrayDisplay();
+  assert.deepEqual(calls, { tooltips: [], titles: [], images: [] });
 });
 
 test('recent usage provider follows the newest valid session timestamp', () => {
@@ -1459,8 +1593,8 @@ test('only macOS draws a tray title beside the icon', () => {
 test('every tray helper main.js destructures is actually exported', () => {
   // main.js pulls its tray helpers off ./tray, which re-exports a chosen subset
   // of ../shared/trayText. Adding a helper to the shared module and to main.js
-  // without widening that re-export leaves main.js holding undefined, and no
-  // test drives updateTrayDisplay(), so the suite stays green while the real
+  // without widening that re-export leaves main.js holding undefined. The
+  // display fixture stubs these imports, so the suite can stay green while the real
   // tray throws on every refresh.
   const trayModule = require('../../src/electron/tray');
   const mainSource = fs.readFileSync(
