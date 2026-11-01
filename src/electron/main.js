@@ -5365,7 +5365,11 @@ function updateTrayDisplay() {
   const customImageMode = mode === 'custom' && providerTrayIcons.custom;
   const text = trayImageMode || customImageMode ? '' : limitText;
   if (trayShowsTitle(process.platform)) tray.setTitle(text);
-  tray.setToolTip('');
+  // Windows has no tray title; keep its hover summary independent of the icon mode.
+  const tooltip = process.platform === 'win32'
+    ? `Token Monitor - ${formatTrayText(visibleStats, 'both', currency, compactOptions)}`
+    : '';
+  tray.setToolTip(tooltip);
   // Icon: rendered bars image in bar modes, otherwise the app icon.
   let icon = null;
   if (barsImageMode || trayImageMode || customImageMode) {
