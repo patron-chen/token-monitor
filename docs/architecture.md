@@ -166,7 +166,7 @@ Local Windows development requires `npm run build:windows-dock`. Packaging build
 
 ## Native tooltips
 
-Electron surfaces and the system tray do not show OS-native tooltips on any platform. Use accessible labels for controls and descriptions for supplemental metadata rather than HTML `title` attributes; SVG chart descriptions use `<desc>`. Keep app-rendered detail tooltips for quota and chart information. Reduced-motion overflow text remains manually scrollable instead of falling back to a native tooltip. This also avoids native tooltip windows remaining over other apps when a floating surface hides or changes input handling.
+Electron surfaces do not show OS-native tooltips, except for the Windows system tray: hovering its icon shows today's token total and estimated cost in every tray content mode, using the selected currency and token units. The macOS and Linux trays keep native tooltips disabled. Use accessible labels for controls and descriptions for supplemental metadata rather than HTML `title` attributes; SVG chart descriptions use `<desc>`. Keep app-rendered detail tooltips for quota and chart information. Reduced-motion overflow text remains manually scrollable instead of falling back to a native tooltip. This also avoids native tooltip windows remaining over other apps when a floating surface hides or changes input handling.
 
 ## Notch presentation
 
