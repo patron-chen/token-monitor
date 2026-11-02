@@ -213,26 +213,34 @@ function normalizeNoProxy(value) {
   return normalized;
 }
 
-function parseProxyUrl(value) {
+function parseProxyUrl(value)
+{
   const raw = cleanProxyUrl(value);
   if (!raw) return { url: '', error: '' };
   // `127.0.0.1:7897` and `localhost:7897` are what people paste from a proxy
   // client; the second would otherwise parse as a `localhost:` scheme.
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
   let parsed;
-  try {
+  try
+  {
     parsed = new URL(withScheme);
-  } catch (_) {
+  }
+  catch (_)
+  {
     return { url: '', error: 'proxy_invalid_url' };
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+  if (!['http:', 'https:', 'socks5:', 'socks:'].includes(parsed.protocol))
+  {
     return { url: '', error: 'proxy_unsupported_scheme' };
   }
   if (parsed.username || parsed.password) return { url: '', error: 'proxy_credentials_unsupported' };
-  if (!parsed.hostname || (parsed.pathname && parsed.pathname !== '/') || parsed.search || parsed.hash) {
+  if (!parsed.hostname || (parsed.pathname && parsed.pathname !== '/') || parsed.search || parsed.hash)
+  {
     return { url: '', error: 'proxy_invalid_url' };
   }
-  return { url: `${parsed.protocol}//${parsed.host}`, error: '' };
+  // Both stacks must interpret the SOCKS alias as SOCKS5.
+  const protocol = parsed.protocol === 'socks:' ? 'socks5:' : parsed.protocol;
+  return { url: `${protocol}//${parsed.host.toLowerCase()}`, error: '' };
 }
 
 function proxyUrlError(value) {
