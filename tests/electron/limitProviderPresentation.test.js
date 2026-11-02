@@ -4460,7 +4460,7 @@ test('the section says where the recorded data shows up', () => {
   const html = readRendererFile('index.html');
   // A record decorates a plan label somewhere else entirely; without being told,
   // there is nothing in this panel that points at it.
-  const notes = [...i18n.matchAll(/'settings\.subscriptions\.note': '(.+?)',\n/g)].map((match) => match[1]);
+  const notes = [...i18n.matchAll(/'settings\.subscriptions\.note': '(.+?)',\r?\n/g)].map((match) => match[1]);
   assert.equal(notes.length, 6);
   for (const note of notes) {
     assert.match(note, /Hover|游標|光标|마우스|カーソル|mouse/);

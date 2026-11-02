@@ -70,7 +70,13 @@ function harness(settings, setProxy, closeAllConnections = async () => {}) {
   };
 }
 
-for (const proxyUrl of ['http://127.0.0.1:7897', 'socks5://invalid']) {
+for (const [proxyUrl, expected] of [
+  ['http://127.0.0.1:7897', 'http://127.0.0.1:7897'],
+  ['socks5://127.0.0.1:7897', 'socks5://127.0.0.1:7897'],
+  ['socks://127.0.0.1:7897', 'socks5://127.0.0.1:7897'],
+  ['socks4://invalid', 'http://proxy.invalid:1']
+])
+{
   test(`Claude runtime waits for the session route at startup (${proxyUrl})`, async (t) => {
     const pending = deferred();
     const h = harness({ proxyUrl }, () => pending.promise);
@@ -91,7 +97,6 @@ for (const proxyUrl of ['http://127.0.0.1:7897', 'socks5://invalid']) {
     await polling;
     assert.ok(h.sent.some((item) => item.kind === 'request'), 'the real collector reaches Claude Web');
     assert.equal(h.sent.find((item) => item.kind === 'request').headers.cookie, 'sessionKey=sk-ant-synthetic-test-only');
-    const expected = proxyUrl.startsWith('http:') ? proxyUrl : 'http://proxy.invalid:1';
     assert.ok(h.sent.every((item) => item.route === expected));
   });
 
@@ -118,7 +123,6 @@ for (const proxyUrl of ['http://127.0.0.1:7897', 'socks5://invalid']) {
     failing = false;
     await runtime.refresh({ provider: 'claude' }, 'settings-change');
     assert.ok(h.sent.some((item) => item.kind === 'request'));
-    const expected = proxyUrl.startsWith('http:') ? proxyUrl : 'http://proxy.invalid:1';
     assert.ok(h.sent.every((item) => item.route === expected));
   });
 }
