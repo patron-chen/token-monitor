@@ -61,7 +61,7 @@ function harness(settings = {}, updateSettings) {
 // the field, over whatever the user had typed since.
 test('a refused save does not overwrite a newer edit', async () => {
   const { els, pending, type, commit, flush } = harness();
-  type(els.proxyUrlInput, 'socks5://127.0.0.1:7897');
+  type(els.proxyUrlInput, 'socks4://127.0.0.1:7897');
   const saving = commit(els.proxyUrlInput);
   type(els.proxyUrlInput, 'http://127.0.0.1:7897');
   pending[0].reject('proxy_unsupported_scheme');
@@ -74,16 +74,16 @@ test('a refused save does not overwrite a newer edit', async () => {
 test('a refused value stays in the field with its reason across settings pushes', async () => {
   const { context, els, pending, type, commit } = harness({ proxyUrl: 'http://127.0.0.1:1' });
   context.syncNetworkProxyControls();
-  type(els.proxyUrlInput, 'socks5://127.0.0.1:7897');
+  type(els.proxyUrlInput, 'socks4://127.0.0.1:7897');
   const saving = commit(els.proxyUrlInput);
   pending[0].reject('proxy_unsupported_scheme');
   await saving;
   context.syncNetworkProxyControls();
-  assert.equal(els.proxyUrlInput.value, 'socks5://127.0.0.1:7897');
+  assert.equal(els.proxyUrlInput.value, 'socks4://127.0.0.1:7897');
   assert.equal(els.proxyUrlError.hidden, false);
   assert.equal(els.proxyUrlError.textContent, i18n.translate('en', 'settings.proxy.error.proxy_unsupported_scheme'));
 
-  type(els.proxyUrlInput, 'socks5://127.0.0.1:789');
+  type(els.proxyUrlInput, 'socks4://127.0.0.1:789');
   assert.equal(els.proxyUrlError.hidden, true, 'editing the field clears its refusal');
 });
 

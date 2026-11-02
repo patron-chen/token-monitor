@@ -30,15 +30,29 @@ test('proxy URLs normalize to scheme://host[:port]', () => {
   assert.equal(normalizeProxyUrl(undefined), '');
 });
 
+test('SOCKS5 proxy URLs and their alias normalize without losing the endpoint', () =>
+{
+  for (const value of ['socks5://127.0.0.1:7897', 'socks://127.0.0.1:7897'])
+  {
+    assert.equal(proxyUrlError(value), '');
+    assert.equal(normalizeProxyUrl(value), 'socks5://127.0.0.1:7897');
+  }
+  assert.equal(normalizeProxyUrl('  SOCKS5://Proxy.Example.com:1080/  '), 'socks5://proxy.example.com:1080');
+  assert.equal(normalizeProxyUrl('socks://[::1]:1080'), 'socks5://[::1]:1080');
+});
+
 test('proxy URLs the transport cannot honor are refused with a reason', () => {
   assert.equal(proxyUrlError(''), '');
   assert.equal(proxyUrlError('http://127.0.0.1:7897'), '');
-  assert.equal(proxyUrlError('socks5://127.0.0.1:7897'), 'proxy_unsupported_scheme');
+  assert.equal(proxyUrlError('socks4://127.0.0.1:7897'), 'proxy_unsupported_scheme');
+  assert.equal(proxyUrlError('socks5h://127.0.0.1:7897'), 'proxy_unsupported_scheme');
+  assert.equal(proxyUrlError('socks5://user:pass@127.0.0.1:7897'), 'proxy_credentials_unsupported');
+  assert.equal(proxyUrlError('socks5://127.0.0.1:7897/path'), 'proxy_invalid_url');
   assert.equal(proxyUrlError('http://user:pass@127.0.0.1:7897'), 'proxy_credentials_unsupported');
   assert.equal(proxyUrlError('http://127.0.0.1:7897/path'), 'proxy_invalid_url');
   assert.equal(proxyUrlError('http://127.0.0.1:99999'), 'proxy_invalid_url');
   assert.equal(proxyUrlError('http://'), 'proxy_invalid_url');
-  assert.equal(normalizeProxyUrl('socks5://127.0.0.1:7897'), '');
+  assert.equal(normalizeProxyUrl('socks4://127.0.0.1:7897'), '');
 });
 
 test('the bypass list accepts commas, spaces and new lines', () => {
@@ -168,11 +182,31 @@ test('the proxy setting replaces every proxy env var and inherits no NO_PROXY', 
   assert.equal(resolveProxyConfig(empty.env).noProxy, '');
 });
 
+test('SOCKS5 settings give Node and Chromium the same canonical proxy and bypasses', () =>
+{
+  for (const scheme of ['socks5', 'socks'])
+  {
+    const settings = { proxyUrl: `${scheme}://127.0.0.1:7897`, noProxy: '.example.com' };
+    const route = outboundRouteForSettings(settings, { HTTPS_PROXY: 'http://stale:1', NO_PROXY: '*' });
+    assert.deepEqual(resolveProxyConfig(route.env), {
+      httpProxy: 'socks5://127.0.0.1:7897',
+      httpsProxy: 'socks5://127.0.0.1:7897',
+      noProxy: 'example.com'
+    });
+    assert.equal(networkProxySource(settings, {}), 'setting');
+    assert.deepEqual(sessionProxyConfig(settings), {
+      mode: 'fixed_servers',
+      proxyRules: 'socks5://127.0.0.1:7897',
+      proxyBypassRules: 'example.com,*.example.com'
+    });
+  }
+});
+
 // A hand-edited settings.json value the form would refuse must not quietly turn
 // into a direct connection on a network where direct access is the problem —
 // on either stack, which is what the settings form reports.
 test('an invalid proxy setting blocks both stacks instead of going direct', () => {
-  for (const proxyUrl of ['socks5://127.0.0.1:7897', 'http://user:pass@127.0.0.1:7897']) {
+  for (const proxyUrl of ['socks4://127.0.0.1:7897', 'http://user:pass@127.0.0.1:7897']) {
     const route = outboundRouteForSettings({ proxyUrl }, { HTTPS_PROXY: 'http://env:1' });
     assert.equal(resolveProxyConfig(route.env).httpsProxy, 'http://proxy.invalid:1');
     assert.equal(route.deps.EnvHttpProxyAgent, AppProxyAgent);
