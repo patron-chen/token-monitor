@@ -161,10 +161,122 @@ async function startOrigin(t, host, handler = (req, res) => res.end('direct')) {
   return { port, hits };
 }
 
+// Only declared domain targets reach a local origin; the fixture never opens
+// external connections. Buffer both SOCKS records because TCP can split them.
+async function startSocksProxy(t, tunnels = {})
+{
+  const connects = [];
+  const sockets = new Set();
+  const proxy = net.createServer((socket) =>
+  {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('error', () => {});
+    let buffer = Buffer.alloc(0);
+    let greeted = false;
+    const onData = (chunk) =>
+    {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!greeted)
+      {
+        if (buffer.length < 2 || buffer.length < 2 + buffer[1]) return;
+        buffer = buffer.subarray(2 + buffer[1]);
+        socket.write(Buffer.from([5, 0]));
+        greeted = true;
+      }
+      if (buffer.length < 5) return;
+      if (buffer[0] !== 5 || buffer[1] !== 1 || buffer[3] !== 3)
+      {
+        socket.destroy();
+        return;
+      }
+      const end = 7 + buffer[4];
+      if (buffer.length < end) return;
+      const target = `${buffer.toString('utf8', 5, end - 2)}:${buffer.readUInt16BE(end - 2)}`;
+      connects.push(target);
+      socket.removeListener('data', onData);
+      const port = tunnels[target];
+      if (!port)
+      {
+        socket.end(Buffer.from([5, 5, 0, 1, 127, 0, 0, 1, 0, 0]));
+        return;
+      }
+      socket.pause();
+      const upstream = net.connect(port, '127.0.0.1', () =>
+      {
+        socket.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0]));
+        if (buffer.length > end) upstream.write(buffer.subarray(end));
+        upstream.pipe(socket);
+        socket.pipe(upstream);
+        socket.resume();
+      });
+      sockets.add(upstream);
+      upstream.on('close', () => sockets.delete(upstream));
+      upstream.on('error', () => socket.destroy());
+      socket.on('close', () => upstream.destroy());
+    };
+    socket.on('data', onData);
+  });
+  const port = await listen(proxy, '127.0.0.1');
+  t.after(() =>
+  {
+    for (const socket of sockets) socket.destroy();
+    return new Promise((resolve) => proxy.close(resolve));
+  });
+  return { url: `socks5://127.0.0.1:${port}`, connects };
+}
+
 function appFetch(proxyUrl, noProxy = '') {
   const route = outboundRouteForSettings({ proxyUrl, noProxy }, {});
   return (url) => createOutboundFetch(route.env, route.deps)(url, { signal: AbortSignal.timeout(3000) });
 }
+
+test('the Electron provider transport sends domain targets through SOCKS5 and its alias', async (t) =>
+{
+  t.after(resetOutboundFetchCache);
+  const origin = await startOrigin(t, '127.0.0.1', (req, res) => res.end('{"available_count":3}'));
+  const proxy = await startSocksProxy(t, { 'quota.invalid:80': origin.port });
+  const chromiumCalls = [];
+  let route;
+  const fetchFn = createElectronLimitsFetch({
+    net: { fetch: async (url) => chromiumCalls.push(url) },
+    getRoute: () => route
+  });
+  for (const scheme of ['socks5:', 'socks:'])
+  {
+    route = outboundRouteForSettings({ proxyUrl: proxy.url.replace('socks5:', scheme) }, {});
+    const response = await fetchFn('http://quota.invalid/reset-credits', { signal: AbortSignal.timeout(3000) });
+    assert.deepEqual(await response.json(), { available_count: 3 });
+  }
+  assert.deepEqual(proxy.connects, ['quota.invalid:80', 'quota.invalid:80']);
+  assert.deepEqual(origin.hits, ['/reset-credits', '/reset-credits']);
+  assert.deepEqual(chromiumCalls, []);
+});
+
+test('SOCKS5 retains local and explicit bypasses and refuses unknown destinations', async (t) =>
+{
+  t.after(resetOutboundFetchCache);
+  const origin = await startOrigin(t, '127.0.0.1');
+  const proxy = await startSocksProxy(t);
+  assert.equal(await (await appFetch(proxy.url)(`http://127.0.0.1:${origin.port}/`)).text(), 'direct');
+  await assert.rejects(appFetch(proxy.url, 'bypassed.invalid')('http://api.bypassed.invalid/'));
+  await assert.rejects(appFetch(proxy.url, '*')('http://anything.invalid/'));
+  assert.deepEqual(proxy.connects, []);
+  await assert.rejects(appFetch(proxy.url)('http://refused.invalid/'));
+  assert.deepEqual(proxy.connects, ['refused.invalid:80']);
+});
+
+test('an unreachable SOCKS5 proxy never falls back to Chromium or a direct request', async () =>
+{
+  const chromiumCalls = [];
+  const route = outboundRouteForSettings({ proxyUrl: 'socks5://127.0.0.1:1' }, {});
+  const fetchFn = createElectronLimitsFetch({
+    net: { fetch: async (url) => chromiumCalls.push(url) },
+    getRoute: () => route
+  });
+  await assert.rejects(fetchFn('http://quota.invalid/', { signal: AbortSignal.timeout(3000) }));
+  assert.deepEqual(chromiumCalls, []);
+});
 
 test('the override ignores the shell proxy env, NO_PROXY included', async (t) => {
   t.after(resetOutboundFetchCache);
@@ -242,7 +354,7 @@ test('a redirect from loopback to a public host goes through the proxy', async (
 test('an invalid proxy setting fails closed except for local hosts', async (t) => {
   t.after(resetOutboundFetchCache);
   const origin = await startOrigin(t, '127.0.0.1');
-  const fetchFn = appFetch('socks5://127.0.0.1:7897');
+  const fetchFn = appFetch('socks4://127.0.0.1:7897');
   await assert.rejects(fetchFn('http://public.invalid/'));
   assert.equal(await (await fetchFn(`http://127.0.0.1:${origin.port}/`)).text(), 'direct');
 });
