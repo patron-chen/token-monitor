@@ -7,11 +7,6 @@ const path = require('node:path');
 const { contentSecurityPolicyForRequest } = require('./contentSecurityPolicy');
 const { app, BaseWindow, BrowserWindow, WebContentsView, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, powerMonitor, protocol, screen, session, shell, systemPreferences } = require('electron');
 const { createRetainedWindow, captureRetainedWindowState, restoreRetainedWindowState } = require('./retainedWindow');
-
-// Configure Chromium and V8 runtime memory switches before app.whenReady()
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128 --expose-gc');
-app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess');
-app.commandLine.appendSwitch('renderer-process-limit', '1');
 const { autoUpdater } = require('electron-updater');
 const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, readJson, sharedDataDir } = require('../shared/config');
 const {
@@ -79,6 +74,12 @@ const {
 // a closed parent pipe turns the next log call into an unhandled 'error'
 // event and Electron pops a "JavaScript error in the main process" dialog.
 installSafeStdout();
+
+// Configure Chromium and V8 runtime memory switches before app.whenReady()
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128 --expose-gc');
+app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess');
+app.commandLine.appendSwitch('renderer-process-limit', '1');
+
 const memoryOptimizer = createMemoryOptimizer();
 const electronClaudeWebFetch = createProxyReadyFetch(createClaudeWebFetch(net), () => sessionProxy.ensureReady());
 const electronWorkbuddyLocalAuth = createWorkbuddyLocalAuth({
@@ -5264,10 +5265,9 @@ function sendPush(payload, options = {}) {
     const deferred = payload?.data?.stats;
     sendMainWindowEvent('stats:push', rendererPayload, () => !deferred || latestStats === deferred);
   } else if (mainWindow && !mainWindow.isDestroyed()) {
-    const isActivelyVisible = (typeof isMainWindowActivelyVisible === 'function')
-      ? isMainWindowActivelyVisible()
-      : true;
-    if (isActivelyVisible) {
+    // Defer stats delivery when main window is hidden/minimized to reduce
+    // renderer work; flush on show/restore (see memory optimization hooks).
+    if (isMainWindowActivelyVisible()) {
       try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
     } else if (payload?.event === 'status') {
       deferredMainWindowStatusPayload = rendererPayload;
@@ -6507,10 +6507,8 @@ function refreshLimitStatsPresentation() {
       event: 'stats',
       data: { type: 'stats', reason: 'presentation', mode, stats: rendererSnapshots.stamp(latestStats, rendererStats(visibleStats)) }
     };
-    const isActivelyVisible = (typeof isMainWindowActivelyVisible === 'function')
-      ? isMainWindowActivelyVisible()
-      : true;
-    if (isActivelyVisible) {
+    // Defer when hidden to reduce renderer work (see memory optimization hooks)
+    if (isMainWindowActivelyVisible()) {
       try {
         mainWindow.webContents.send('stats:push', payload);
       } catch (_) {}
@@ -7899,24 +7897,16 @@ function createWindow(boundsOverride, options = {}) {
     if (quitRequested || process.platform === 'darwin') return;
     if (BaseWindow.getAllWindows().every((other) => (edgeDockController?.owns(other) || notchController?.owns(other)))) app.quit();
   });
-  win.on('show', () => {
-    memoryOptimizer.cancelScheduledTrim();
-    syncPluginWindowVisibility(win);
-    flushDeferredStatsToMainWindow(win);
-  });
-  win.on('hide', () => {
-    syncPluginWindowVisibility(win);
-    scheduleBackgroundMemoryTrim(1500, true);
-  });
-  win.on('minimize', () => {
-    syncPluginWindowVisibility(win);
-    scheduleBackgroundMemoryTrim(1500, true);
-  });
-  win.on('restore', () => {
-    memoryOptimizer.cancelScheduledTrim();
-    syncPluginWindowVisibility(win);
-    flushDeferredStatsToMainWindow(win);
-  });
+  win.on('show', () => syncPluginWindowVisibility(win));
+  win.on('hide', () => syncPluginWindowVisibility(win));
+  win.on('minimize', () => syncPluginWindowVisibility(win));
+  win.on('restore', () => syncPluginWindowVisibility(win));
+  // Memory optimization hooks: separate listeners to avoid merge conflicts
+  // with upstream's plugin-visibility handlers above.
+  win.on('show', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
+  win.on('hide', () => scheduleBackgroundMemoryTrim(1500, true));
+  win.on('minimize', () => scheduleBackgroundMemoryTrim(1500, true));
+  win.on('restore', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
   if (!options.previousWindow) win.webContents.on('did-finish-load', () => {
     sendFloatingBubbleState();
     // Only report a window that is already on screen. A window still awaiting its
