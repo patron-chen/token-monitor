@@ -8,7 +8,9 @@ const { captureWindowViewState, restoreWindowViewState } = require('./renderer/w
 
 function createRetainedWindow({ BaseWindow, WebContentsView }, options, previous) {
   const { webPreferences = {}, ...windowOptions } = options;
-  const win = new BaseWindow(windowOptions);
+  // The child view and background supply transparency. A transparent native
+  // BaseWindow HWND can flash a solid DWM surface when reopened from the tray.
+  const win = new BaseWindow({ ...windowOptions, transparent: false });
   let entry = entries.get(previous);
   if (!entry) {
     entry = { view: new WebContentsView({ webPreferences }), owner: null };
