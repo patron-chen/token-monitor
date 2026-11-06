@@ -5,6 +5,7 @@
 // DwmEnableBlurBehindWindow plus the undocumented
 // SetWindowCompositionAttribute(WCA_ACCENT_POLICY) API. Keep every call lazy
 // and best-effort so an unsupported Windows build can fall back to Acrylic.
+const os = require('node:os');
 
 const DEFAULT_ACCENT_ARGB = 0x3a232323;
 
@@ -17,12 +18,27 @@ const DWM_BB_TRANSITIONONMAXIMIZED = 0x4;
 let accentApi = null;
 const windowStates = new WeakMap();
 
-function hwndOf(win) {
+// Check whether the platform is Windows 10 or earlier (build < 22000).
+// Windows 10 lacks DWMWA_SYSTEMBACKDROP_TYPE (build 22621+) and requires
+// AccentBlurBehind (SetWindowCompositionAttribute) for acrylic blur behind.
+function isWindows10OrEarlier(platform = process.platform, release = os.release())
+{
+  if (platform !== 'win32')
+  {
+    return false;
+  }
+  const build = Number(String(release).split('.')[2] || 0);
+  return build > 0 && build < 22000;
+}
+
+function hwndOf(win)
+{
   const buffer = win.getNativeWindowHandle();
   return buffer.length >= 8 ? buffer.readBigUInt64LE() : BigInt(buffer.readUInt32LE());
 }
 
-function createAccentApi(koffi) {
+function createAccentApi(koffi)
+{
   const user32 = koffi.load('user32.dll');
   const dwmapi = koffi.load('dwmapi.dll');
   const gdi32 = koffi.load('gdi32.dll');
@@ -63,24 +79,35 @@ function createAccentApi(koffi) {
   const DeleteObject = gdi32.func('bool DeleteObject(void *object)');
 
   return {
-    apply(hwnd, argb) {
+    apply(hwnd, argb)
+    {
       const region = CreateRectRgn(0, 0, -1, -1);
-      if (!region) return false;
-      try {
+      if (!region)
+      {
+        return false;
+      }
+      try
+      {
         const blurBehind = {
           dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION | DWM_BB_TRANSITIONONMAXIMIZED,
           fEnable: 1,
           hRgnBlur: region,
           fTransitionOnMaximized: 1
         };
-        if (DwmEnableBlurBehindWindow(hwnd, blurBehind) < 0) return false;
+        if (DwmEnableBlurBehindWindow(hwnd, blurBehind) < 0)
+        {
+          return false;
+        }
 
         if (DwmExtendFrameIntoClientArea(hwnd, {
           cxLeftWidth: -1,
           cxRightWidth: -1,
           cyTopHeight: -1,
           cyBottomHeight: -1
-        }) < 0) return false;
+        }) < 0)
+        {
+          return false;
+        }
 
         const accent = {
           AccentState: ACCENT_ENABLE_ACRYLICBLURBEHIND,
@@ -94,11 +121,14 @@ function createAccentApi(koffi) {
           cbData: koffi.sizeof(ACCENT_POLICY)
         };
         return Boolean(SetWindowCompositionAttribute(hwnd, data));
-      } finally {
+      }
+      finally
+      {
         DeleteObject(region);
       }
     },
-    clear(hwnd) {
+    clear(hwnd)
+    {
       const accent = { AccentState: 0, AccentFlags: 0, GradientColor: 0, AnimationId: 0 };
       const policy = SetWindowCompositionAttribute(hwnd, {
         Attrib: WCA_ACCENT_POLICY,
@@ -116,39 +146,83 @@ function createAccentApi(koffi) {
   };
 }
 
-function loadAccentApi() {
-  if (accentApi !== null) return accentApi;
-  try {
+function loadAccentApi()
+{
+  if (accentApi !== null)
+  {
+    return accentApi;
+  }
+  try
+  {
     accentApi = createAccentApi(require('koffi'));
-  } catch (_) {
+  }
+  catch (_)
+  {
     accentApi = false;
   }
   return accentApi;
 }
 
-function applyWindowsAccentBlur(win, options = {}) {
-  if ((options.platform || process.platform) !== 'win32') return false;
-  if (!win || win.isDestroyed?.()) return false;
+function applyWindowsAccentBlur(win, options = {})
+{
+  if ((options.platform || process.platform) !== 'win32')
+  {
+    return false;
+  }
+  if (!win || win.isDestroyed?.())
+  {
+    return false;
+  }
   const api = options.api || loadAccentApi();
-  if (!api) return false;
-  try {
+  if (!api)
+  {
+    return false;
+  }
+  try
+  {
     return api.apply(hwndOf(win), options.argb ?? DEFAULT_ACCENT_ARGB) === true;
-  } catch (_) {
+  }
+  catch (_)
+  {
     return false;
   }
 }
 
-function syncWindowsBackdrop(win, { enabled = true, mode = 'acrylic' } = {}, options = {}) {
-  if ((options.platform || process.platform) !== 'win32' || !win || win.isDestroyed?.()) return;
+function syncWindowsBackdrop(win, { enabled = true, mode = 'acrylic' } = {}, options = {})
+{
+  const platform = options.platform || process.platform;
+  if (platform !== 'win32' || !win || win.isDestroyed?.())
+  {
+    return;
+  }
+  const isWin10 = isWindows10OrEarlier(platform, options.osRelease);
   const wanted = !enabled ? 'transparent' : mode === 'accent' ? 'accent' : 'acrylic';
   const previous = windowStates.get(win);
-  if (previous?.mode === wanted && !previous.accentCleanupPending) return previous;
-  const api = options.api || (wanted === 'accent' || previous?.mode === 'accent' || previous?.accentCleanupPending ? loadAccentApi() : null);
-  const clearAccent = () => {
-    if (!api) return true; // No native Accent API could have applied a policy.
-    try { return api.clear(hwndOf(win)) === true; } catch (_) { return false; }
+  if (previous?.mode === wanted && !previous.accentCleanupPending)
+  {
+    return previous;
+  }
+  // Windows 10 lacks native DWMWA_SYSTEMBACKDROP_TYPE so Acrylic uses Accent blur instead
+  const usedAccent = previous?.mode === 'accent' || (previous?.mode === 'acrylic' && isWin10);
+  const willUseAccent = wanted === 'accent' || (wanted === 'acrylic' && isWin10);
+  const api = options.api || (willUseAccent || usedAccent || previous?.accentCleanupPending ? loadAccentApi() : null);
+  const clearAccent = () =>
+  {
+    if (!api)
+    {
+      return true; // No native Accent API could have applied a policy.
+    }
+    try
+    {
+      return api.clear(hwndOf(win)) === true;
+    }
+    catch (_)
+    {
+      return false;
+    }
   };
-  if ((previous?.mode === 'accent' || previous?.accentCleanupPending) && !clearAccent()) {
+  if ((usedAccent || previous?.accentCleanupPending) && !clearAccent())
+  {
     console.warn('[window] Accent cleanup failed; retaining the current material until the next sync');
     const state = { ...previous, accentCleanupPending: true };
     windowStates.set(win, state);
@@ -156,19 +230,28 @@ function syncWindowsBackdrop(win, { enabled = true, mode = 'acrylic' } = {}, opt
   }
   let fallback = false;
   let accentCleanupPending = false;
-  if (wanted === 'accent') {
+  if (willUseAccent)
+  {
     win.setBackgroundMaterial('none');
     // Electron resets the page background to white when removing a material.
     win.setBackgroundColor('#00000000');
-    if (!applyWindowsAccentBlur(win, { ...options, api })) {
+    if (!applyWindowsAccentBlur(win, { ...options, api }))
+    {
       accentCleanupPending = !clearAccent(); // A failed apply can already have extended the DWM frame.
       win.setBackgroundMaterial('acrylic');
-      console.warn('[window] AccentBlurBehind unavailable; falling back to Acrylic');
-      fallback = true;
+      if (wanted === 'accent')
+      {
+        console.warn('[window] AccentBlurBehind unavailable; falling back to Acrylic');
+        fallback = true;
+      }
     }
-  } else if (wanted === 'acrylic') {
+  }
+  else if (wanted === 'acrylic')
+  {
     win.setBackgroundMaterial('acrylic');
-  } else {
+  }
+  else
+  {
     win.setBackgroundMaterial('none');
     // Removing a material resets Electron's background. The host is created
     // transparent, so restoring alpha reveals the desktop on the same HWND.
@@ -179,7 +262,8 @@ function syncWindowsBackdrop(win, { enabled = true, mode = 'acrylic' } = {}, opt
   return state;
 }
 
-function windowsBackdropFallback(win) {
+function windowsBackdropFallback(win)
+{
   return windowStates.get(win)?.fallback === true;
 }
 
@@ -188,5 +272,6 @@ module.exports = {
   applyWindowsAccentBlur,
   createAccentApi,
   syncWindowsBackdrop,
-  windowsBackdropFallback
+  windowsBackdropFallback,
+  isWindows10OrEarlier
 };
