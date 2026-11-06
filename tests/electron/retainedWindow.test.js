@@ -75,7 +75,20 @@ function fixture() {
   return { views, create: (options, previous) => createRetainedWindow({ BaseWindow, WebContentsView }, options, previous) };
 }
 
-test('changing transparency and mini-window chrome retains a single page across repeated host transfers', () => {
+test('the native host stays opaque while its page and background retain transparency', () =>
+{
+  const f = fixture();
+  const options = { width: 400, height: 600, show: false, transparent: true, backgroundColor: '#00000000', webPreferences: { backgroundThrottling: true } };
+  const win = f.create(options);
+
+  assert.equal(win.options.transparent, false, 'DWM must not restore a transparent native HWND');
+  assert.equal(win.options.backgroundColor, '#00000000');
+  assert.equal(f.views[0].color, '#00000000', 'the retained child page supplies the transparent content');
+  assert.deepEqual(f.views[0].options.webPreferences, { backgroundThrottling: true });
+  assert.equal(options.transparent, true, 'creating a host does not mutate its caller options');
+});
+
+test('replacing native hosts and mini-window chrome retains a single page across repeated transfers', () => {
   const f = fixture();
   let win = f.create({ width: 400, height: 600, transparent: false, webPreferences: { contextIsolation: true } });
   const page = win.webContents;
