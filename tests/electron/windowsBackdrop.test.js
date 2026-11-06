@@ -326,3 +326,22 @@ test('experimental Accent mode uses the shared glass surface treatment', () => {
   assert.doesNotMatch(css, /windows-accent-backdrop/);
   assert.match(html, /id="windowsBackdropNote"[^>]*class="[^"]*hidden"/);
 });
+
+test('Windows 10 Acrylic uses Accent Blur Behind instead of unsupported system backdrop material', () =>
+{
+  const calls = [];
+  const win = {
+    isDestroyed: () => false,
+    getNativeWindowHandle: () => Buffer.alloc(8),
+    setBackgroundMaterial: value => calls.push(['material', value]),
+    setBackgroundColor: value => calls.push(['color', value])
+  };
+  const api = { apply: () => { calls.push(['accent']); return true; }, clear: () => { calls.push(['clear']); return true; } };
+  const sync = settings => syncWindowsBackdrop(win, settings, { platform: 'win32', osRelease: '10.0.19045', api });
+
+  sync({ mode: 'acrylic' });
+  assert.deepEqual(calls, [['material', 'none'], ['color', '#00000000'], ['accent']]);
+  calls.length = 0;
+  sync({ enabled: false });
+  assert.deepEqual(calls, [['clear'], ['material', 'none'], ['color', '#00000000']]);
+});
