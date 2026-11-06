@@ -5180,14 +5180,21 @@ function shouldPerformBackgroundMemoryTrim() {
 
 function flushDeferredStatsToMainWindow(win = mainWindow) {
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-  if (deferredMainWindowStatusPayload) {
-    try { win.webContents.send('stats:push', deferredMainWindowStatusPayload); } catch (_) {}
-    deferredMainWindowStatusPayload = null;
-  }
-  if (deferredMainWindowStatsPayload) {
-    try { win.webContents.send('stats:push', deferredMainWindowStatsPayload); } catch (_) {}
-    deferredMainWindowStatsPayload = null;
-  }
+  const statusPayload = deferredMainWindowStatusPayload;
+  const statsPayload = deferredMainWindowStatsPayload;
+  deferredMainWindowStatusPayload = null;
+  deferredMainWindowStatsPayload = null;
+  if (!statusPayload && !statsPayload) return;
+  // Defer stats delivery slightly after reveal so the existing painted frame displays smoothly without flashing
+  setTimeout(() => {
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    if (statusPayload) {
+      try { win.webContents.send('stats:push', statusPayload); } catch (_) {}
+    }
+    if (statsPayload) {
+      try { win.webContents.send('stats:push', statsPayload); } catch (_) {}
+    }
+  }, 50);
 }
 
 function getActiveWatcherPid() {
@@ -5217,7 +5224,8 @@ function scheduleBackgroundMemoryTrim(delayMs = 1500, force = false) {
       if (typeof app?.getAppMetrics === 'function') {
         const metrics = app.getAppMetrics();
         for (const m of metrics) {
-          if (m?.pid && m.pid !== process.pid) pids.push(m.pid);
+          // Never trim the GPU process working set as it forces DirectX/DirectComposition surface purges
+          if (m?.pid && m.pid !== process.pid && m?.type !== 'GPU') pids.push(m.pid);
         }
       }
     } catch (_) {}
@@ -5700,7 +5708,12 @@ function focusExistingWindow() {
     createWindow();
     return;
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
+  // When minimized, restoring already un-minimizes and reveals the window.
+  // Avoid calling show() right after restore() which can cause a DWM glitch/flash.
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+    return;
+  }
   if (settings?.trayMode) showPopover();
   else {
     applyMacSpaceBehavior(false);
@@ -7868,7 +7881,8 @@ function createWindow(boundsOverride, options = {}) {
       zoomFactor: clampZoom(settings.zoomFactor),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: true
+      // Retain the compositor frame buffer when hidden so reopening from tray never flashes
+      backgroundThrottling: false
     }
   };
   const win = process.platform === 'win32'
@@ -7956,8 +7970,8 @@ function createWindow(boundsOverride, options = {}) {
   // Memory optimization hooks: separate listeners to avoid merge conflicts
   // with upstream's plugin-visibility handlers above.
   win.on('show', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
-  win.on('hide', () => scheduleBackgroundMemoryTrim(1500, true));
-  win.on('minimize', () => scheduleBackgroundMemoryTrim(1500, true));
+  win.on('hide', () => scheduleBackgroundMemoryTrim(10000, false));
+  win.on('minimize', () => scheduleBackgroundMemoryTrim(10000, false));
   win.on('restore', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
   if (!options.previousWindow) win.webContents.on('did-finish-load', () => {
     sendFloatingBubbleState();
@@ -8095,7 +8109,8 @@ function createDashboardWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: true
+      // Retain the compositor frame buffer when hidden so reopening from tray never flashes
+      backgroundThrottling: false
     }
   };
   const win = new BrowserWindow(windowOptions);

@@ -48,7 +48,10 @@ function fixture() {
       super();
       this.options = options;
       this.size = [options.width, options.height];
-      this.contentView = { addChildView: view => { this.view = view; } };
+      this.contentView = {
+        addChildView: view => { this.view = view; },
+        setBackgroundColor: color => { this.contentViewColor = color; }
+      };
     }
     getContentSize() { return this.size; }
     isDestroyed() { return this.destroyed === true; }
@@ -72,10 +75,40 @@ function fixture() {
     setBackgroundColor(color) { this.color = color; }
     setBounds(bounds) { this.bounds = bounds; }
   }
-  return { views, create: (options, previous) => createRetainedWindow({ BaseWindow, WebContentsView }, options, previous) };
+  return {
+    views,
+    BaseWindow,
+    WebContentsView,
+    create: (options, previous, deps) => createRetainedWindow({ BaseWindow, WebContentsView }, options, previous, deps)
+  };
 }
 
-test('changing transparency and mini-window chrome retains a single page across repeated host transfers', () => {
+test('the native host stays opaque while its page and background retain transparency', () =>
+{
+  const f = fixture();
+  const options = { width: 400, height: 600, show: false, transparent: true, backgroundColor: '#00000000', webPreferences: { backgroundThrottling: true } };
+  const win = f.create(options, null, { platform: 'win32', osRelease: '10.0.22621' });
+
+  assert.equal(win.options.transparent, false, 'Windows 11 DWM must not restore a transparent native HWND');
+  assert.equal(win.options.backgroundColor, '#00000000');
+  assert.equal(f.views[0].color, '#00000000', 'the retained child page supplies the transparent content');
+  assert.deepEqual(f.views[0].options.webPreferences, { backgroundThrottling: true });
+  assert.equal(options.transparent, true, 'creating a host does not mutate its caller options');
+});
+
+test('Windows 10 retains a transparent native host for rounded corners and glass', () =>
+{
+  const f = fixture();
+  const options = { width: 400, height: 600, show: false, transparent: true, backgroundColor: '#00000000', webPreferences: { backgroundThrottling: false } };
+  const win = f.create(options, null, { platform: 'win32', osRelease: '10.0.19045' });
+
+  assert.equal(win.options.transparent, true, 'Windows 10 requires transparent native HWND');
+  assert.equal(win.options.backgroundColor, '#00000000');
+  assert.equal(f.views[0].color, '#00000000');
+  assert.equal(win.contentViewColor, '#00000000');
+});
+
+test('replacing native hosts and mini-window chrome retains a single page across repeated transfers', () => {
   const f = fixture();
   let win = f.create({ width: 400, height: 600, transparent: false, webPreferences: { contextIsolation: true } });
   const page = win.webContents;
