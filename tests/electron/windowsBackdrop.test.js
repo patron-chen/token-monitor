@@ -198,7 +198,7 @@ test('Windows material preferences keep transparent document hosts instead of re
   assert.doesNotMatch(main, /windowsLayeredBlur/);
 });
 
-function materialFixture(result = true) {
+function materialFixture(result = true, osRelease = '10.0.22621') {
   const calls = [];
   const win = {
     isDestroyed: () => false,
@@ -207,7 +207,7 @@ function materialFixture(result = true) {
     setBackgroundColor: value => calls.push(['color', value])
   };
   const api = { apply: () => { calls.push(['accent']); return result; }, clear: () => { calls.push(['clear']); return true; } };
-  return { win, calls, api, sync: settings => syncWindowsBackdrop(win, settings, { platform: 'win32', api }) };
+  return { win, calls, api, sync: settings => syncWindowsBackdrop(win, settings, { platform: 'win32', osRelease, api }) };
 }
 
 test('failed Accent cleanup keeps the old transition retryable instead of caching success', () => {
@@ -325,4 +325,48 @@ test('experimental Accent mode uses the shared glass surface treatment', () => {
   assert.doesNotMatch(app, /windows-accent-backdrop/);
   assert.doesNotMatch(css, /windows-accent-backdrop/);
   assert.match(html, /id="windowsBackdropNote"[^>]*class="[^"]*hidden"/);
+});
+
+test('Windows 10 Acrylic uses Accent Blur Behind instead of unsupported system backdrop material', () =>
+{
+  const calls = [];
+  const win = {
+    isDestroyed: () => false,
+    getNativeWindowHandle: () => Buffer.alloc(8),
+    setBackgroundMaterial: value => calls.push(['material', value]),
+    setBackgroundColor: value => calls.push(['color', value])
+  };
+  const api = { apply: () => { calls.push(['accent']); return true; }, clear: () => { calls.push(['clear']); return true; } };
+  const sync = settings => syncWindowsBackdrop(win, settings, { platform: 'win32', osRelease: '10.0.19045', api });
+
+  sync({ mode: 'acrylic' });
+  assert.deepEqual(calls, [['material', 'none'], ['color', '#00000000'], ['accent']]);
+  calls.length = 0;
+  sync({ enabled: false });
+  assert.deepEqual(calls, [['clear'], ['material', 'none'], ['color', '#00000000']]);
+});
+
+test('Windows 10 keeps transparent CSS fallback when Accent Blur Behind fails instead of calling unsupported Acrylic', () =>
+{
+  const f = materialFixture(false, '10.0.19045');
+  const acrylicState = f.sync({ mode: 'acrylic' });
+  assert.equal(acrylicState.fallback, false);
+  assert.deepEqual(f.calls, [
+    ['material', 'none'],
+    ['color', '#00000000'],
+    ['accent'],
+    ['clear'],
+    ['color', '#00000000']
+  ]);
+  f.calls.length = 0;
+  const accentState = f.sync({ mode: 'accent' });
+  assert.equal(accentState.fallback, true);
+  assert.deepEqual(f.calls, [
+    ['clear'],
+    ['material', 'none'],
+    ['color', '#00000000'],
+    ['accent'],
+    ['clear'],
+    ['color', '#00000000']
+  ]);
 });

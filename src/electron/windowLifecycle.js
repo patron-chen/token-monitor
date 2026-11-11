@@ -1,5 +1,7 @@
 'use strict';
 
+const { whenWindowsRevealSettled } = require('./windowsChrome');
+
 function showWindow(target, inactive = false) {
   if (!target || target.isDestroyed() || target.isVisible()) return;
   if (inactive && typeof target.showInactive === 'function') {
@@ -28,9 +30,13 @@ function handoffWindow(oldWindow, nextWindow, options = {}) {
       clearTimer(fallbackTimer);
       fallbackTimer = null;
     }
-    nextWindow?.removeListener('show', finish);
+    nextWindow?.removeListener('show', finishWhenReady);
     destroyOld();
     if (shouldFocus && nextWindow && !nextWindow.isDestroyed()) nextWindow.focus();
+  };
+
+  const finishWhenReady = () => {
+    whenWindowsRevealSettled(nextWindow, finish);
   };
 
   if (!nextWindow || nextWindow.isDestroyed()) {
@@ -38,10 +44,10 @@ function handoffWindow(oldWindow, nextWindow, options = {}) {
     return;
   }
   if (nextWindow.isVisible()) {
-    finish();
+    finishWhenReady();
     return;
   }
-  nextWindow.once('show', finish);
+  nextWindow.once('show', finishWhenReady);
   fallbackTimer = setTimer(finish, fallbackMs);
 }
 

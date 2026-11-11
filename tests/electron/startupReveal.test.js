@@ -17,6 +17,7 @@ function startupWindow(options = {}, settings = {}) {
   target.webContents = new EventEmitter();
   target.webContents.loadFile = () => Promise.resolve();
   let reveals = 0;
+  let warmed = 0;
   let fallback;
   const context = vm.createContext({
     ipcMain, settings, target, options, path, __dirname: electronDir, console,
@@ -24,6 +25,7 @@ function startupWindow(options = {}, settings = {}) {
     clearTimeout: () => { fallback = null; },
     applyZoomFactor: () => {},
     restoreWindowMaximizedForReveal: () => false,
+    warmWindowsWindow: () => { warmed += 1; },
     revealWindow: () => { reveals += 1; target.emit('show'); }
   });
   const loader = main.slice(main.indexOf('function loadWindowFile('), main.indexOf('function createWindow('));
@@ -31,7 +33,7 @@ function startupWindow(options = {}, settings = {}) {
   const create = main.slice(main.indexOf('function createWindow('), main.indexOf('function handleZoomShortcut('));
   const wait = create.slice(create.indexOf('loadWindowFile(win,')).match(/waitForContent: ([^,]+),/)[1];
   vm.runInContext(`${loader}\nloadWindowFile(target, { waitForContent: ${wait} });`, context);
-  return { target, ipcMain, reveals: () => reveals, fallback: () => fallback?.() };
+  return { target, ipcMain, reveals: () => reveals, warmed: () => warmed, fallback: () => fallback?.() };
 }
 
 test('cold startup waits for appearance without requiring stats content', () => {
@@ -58,6 +60,7 @@ test('startup retains failure fallback and tray hiding; replacements can wait fo
   tray.ipcMain.emit('window:appearanceReady', { sender: tray.target.webContents });
   tray.fallback();
   assert.equal(tray.reveals(), 0);
+  assert.equal(tray.warmed(), 1);
   const replacement = startupWindow({ waitForContent: true });
   replacement.ipcMain.emit('window:appearanceReady', { sender: replacement.target.webContents });
   assert.equal(replacement.reveals(), 0);
