@@ -646,3 +646,29 @@ test('a real worker sends a bounded activity patch without transforming or captu
     assert.ok(JSON.stringify(patches[0]).length < 250);
   } finally { host.stop(); await host.whenIdle(); }
 });
+
+test('a real worker strips stray function-valued options before cloning workerData', async () =>
+{
+  const inProcess = fakeInProcessCollector();
+  const coordinator = createUsageHostCoordinator({
+    workerPath: SCRIPTED_WORKER,
+    startCollector: inProcess.startCollector
+  });
+  const runtime = coordinator.create({
+    clients: 'codex',
+    watchDebounceMs: () => 1500,
+    unexpectedCallback: () => 42,
+    onUpdate: () => {}
+  });
+  try
+  {
+    assert.equal(await runtime.tick('manual'), true);
+    assert.equal(coordinator.inspect().workerDisabled, false);
+    assert.equal(inProcess.started.length, 0);
+  }
+  finally
+  {
+    runtime.stop();
+    await runtime.whenIdle();
+  }
+});
