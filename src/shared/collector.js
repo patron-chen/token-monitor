@@ -2796,13 +2796,7 @@ function startCollector(options) {
   // setTimeout rewrites those to 1ms, turning the debounce's mid-tick re-arm and
   // the interval loop into spins. Clamping here means no timer below can
   // reintroduce that by forgetting.
-  const resolveWatchDebounceMs = () => {
-    const candidate = typeof options.watchDebounceMs === 'function'
-      ? options.watchDebounceMs()
-      : options.watchDebounceMs;
-    return clampTimerDelayMs(candidate, 1500);
-  };
-  const watchDebounceMs = resolveWatchDebounceMs();
+  const watchDebounceMs = clampTimerDelayMs(options.watchDebounceMs, 1500);
   // Floored at the debounce: a ceiling shorter than one debounce window would
   // pull every lone event forward and make the debounce itself unobservable.
   const watchMaxWaitMs = Math.max(watchDebounceMs, clampTimerDelayMs(options.watchMaxWaitMs, WATCH_MAX_WAIT_MS));
@@ -3765,10 +3759,9 @@ function startCollector(options) {
     const nowMs = performance.now();
     if (tickInFlight) watchDeadlineAt = 0;
     else if (watchDeadlineAt === 0) watchDeadlineAt = nowMs + watchMaxWaitMs;
-    const activeDebounceMs = resolveWatchDebounceMs();
     const delayMs = watchDeadlineAt === 0
-      ? activeDebounceMs
-      : Math.max(1, Math.min(activeDebounceMs, watchDeadlineAt - nowMs));
+      ? watchDebounceMs
+      : Math.max(1, Math.min(watchDebounceMs, watchDeadlineAt - nowMs));
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
