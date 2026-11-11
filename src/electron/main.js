@@ -485,7 +485,12 @@ const {
   applyWindowSizeLimits,
   restoreFloatingBubbleWindow
 } = require('./floatingBubble');
-const { applyWindowsChrome } = require('./windowsChrome');
+const {
+  applyWindowsChrome,
+  isWindowsRevealPrewarming,
+  onBeforeWindowsReveal,
+  warmWindowsWindow
+} = require('./windowsChrome');
 const { installWindowsNonActivatingInput } = require('./windowsNonActivatingInput');
 const { canUseEdgeDock, createEdgeDockController, edgeDockSupported } = require('./edgeDock/controller');
 const { createWindowsDockBackdrop } = require('./edgeDock/windowsBackdrop');
@@ -2391,7 +2396,7 @@ function sendFloatingBubbleState() {
 }
 
 function syncPluginWindowVisibility(win) {
-  pluginRuntime?.refreshWindowVisibility(win);
+  if (!isWindowsRevealPrewarming(win)) pluginRuntime?.refreshWindowVisibility(win);
   sendMainWindowVisibility(win);
 }
 
@@ -7822,14 +7827,15 @@ function deliverMainWindowStatsPush(payload, win = mainWindow)
   });
 }
 
-function flushDeferredStatsToMainWindow(win = mainWindow)
+function flushDeferredStatsToMainWindow(win = mainWindow, { immediate = false, allowHidden = false } = {})
 {
   if (!win || win !== mainWindow || win.isDestroyed() || win.webContents.isDestroyed())
   {
     return;
   }
   deferredMainWindowPush.flush({
-    canSend: () => win === mainWindow && !win.isDestroyed() && !win.webContents.isDestroyed() && isMainWindowActivelyVisible(),
+    immediate,
+    canSend: () => win === mainWindow && !win.isDestroyed() && !win.webContents.isDestroyed() && (allowHidden || isMainWindowActivelyVisible()),
     send: (nextPayload) =>
     {
       try { win.webContents.send('stats:push', nextPayload); } catch (_) {}
@@ -7873,7 +7879,11 @@ function loadWindowFile(target, options = {}) {
   const reveal = () => {
     if (revealed) return;
     revealed = true;
-    if (settings?.trayMode) return; // stay hidden until tray click
+    if (settings?.trayMode) {
+      // Pre-warm the Win32 transparent host while cloaked so the first tray open has zero flash.
+      warmWindowsWindow(target);
+      return; // stay hidden until tray click
+    }
     if (restoreWindowMaximizedForReveal(target, settings, {
       restoreMaximized: options.restoreMaximized === true,
       inactive: options.inactive === true,
@@ -7953,7 +7963,8 @@ function createWindow(boundsOverride, options = {}) {
   mainWindow = win;
   mainWindowChrome = { collapsedFloatingBubble };
   applyMacSpaceBehavior();
-  applyWindowsChrome(win, { round: true });
+  applyWindowsChrome(win, { round: true, preventRevealFlash: true });
+  onBeforeWindowsReveal(win, () => flushDeferredStatsToMainWindow(win, { immediate: true, allowHidden: true }));
   win.on('maximize', () => {
     if (!shouldTrackWindowMaximized(settings, floatingBubbleState)) {
       // A tray popover is sized from getBounds() on every open, so a maximized
@@ -8026,16 +8037,11 @@ function createWindow(boundsOverride, options = {}) {
     if (quitRequested || process.platform === 'darwin') return;
     if (BaseWindow.getAllWindows().every((other) => (edgeDockController?.owns(other) || notchController?.owns(other)))) app.quit();
   });
-  win.on('show', () => syncPluginWindowVisibility(win));
-  win.on('hide', () => syncPluginWindowVisibility(win));
-  win.on('minimize', () => syncPluginWindowVisibility(win));
-  win.on('restore', () => syncPluginWindowVisibility(win));
-  // Memory optimization hooks: separate listeners to avoid merge conflicts
-  // with upstream's plugin-visibility handlers above.
-  win.on('show', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
-  win.on('hide', () => { deferredMainWindowPush.cancelFlush(); scheduleBackgroundMemoryTrim(10000, false); });
-  win.on('minimize', () => { deferredMainWindowPush.cancelFlush(); scheduleBackgroundMemoryTrim(10000, false); });
-  win.on('restore', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
+  // Flush deferred stats before publishing window visibility so the first painted frame renders live data.
+  win.on('show', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win, { immediate: true }); syncPluginWindowVisibility(win); });
+  win.on('hide', () => { syncPluginWindowVisibility(win); deferredMainWindowPush.cancelFlush(); scheduleBackgroundMemoryTrim(10000, false); });
+  win.on('minimize', () => { syncPluginWindowVisibility(win); deferredMainWindowPush.cancelFlush(); scheduleBackgroundMemoryTrim(10000, false); });
+  win.on('restore', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win, { immediate: true }); syncPluginWindowVisibility(win); });
   if (!options.previousWindow) win.webContents.on('did-finish-load', () => {
     sendFloatingBubbleState();
     // Only report a window that is already on screen. A window still awaiting its
@@ -8179,7 +8185,7 @@ function createDashboardWindow() {
   const win = new BrowserWindow(windowOptions);
   dashboardWindow = win;
   dashboardWindowReady = false;
-  applyWindowsChrome(win, { round: true });
+  applyWindowsChrome(win, { round: true, preventRevealFlash: true });
   syncWindowsBackdrop(win, { enabled: nativeBlurEnabled() });
   attachNativeMaterialVisibility(win, () => nativeMaterialOptions(settings, true));
   syncNativeMaterialVisibility(win, nativeMaterialOptions(settings, true));

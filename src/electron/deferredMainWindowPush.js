@@ -93,18 +93,15 @@ function createDeferredMainWindowPush({
     defer(payload);
   }
 
-  function flush({ canSend, send } = {})
+  function flush({ canSend, send, immediate = false } = {})
   {
     cancelFlush();
     if (!hasPending() || typeof canSend !== 'function' || typeof send !== 'function')
     {
       return;
     }
-    // Defer briefly after reveal so the painted frame settles, retaining queued payloads
-    // unless the window is still actively visible when the timer runs.
-    flushTimer = setTimer(() =>
+    const deliverPending = () =>
     {
-      flushTimer = null;
       if (!canSend())
       {
         return;
@@ -127,6 +124,18 @@ function createDeferredMainWindowPush({
       {
         send(nextActivity);
       }
+    };
+    if (immediate || delayMs <= 0)
+    {
+      deliverPending();
+      return;
+    }
+    // Defer briefly after reveal so the painted frame settles, retaining queued payloads
+    // unless the window is still actively visible when the timer runs.
+    flushTimer = setTimer(() =>
+    {
+      flushTimer = null;
+      deliverPending();
     }, delayMs);
   }
 
