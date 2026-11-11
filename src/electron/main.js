@@ -55,6 +55,7 @@ const { isLimitWindowHidden: historyWindowHidden } = require('../shared/limits/u
 const { maskEmailAddress: historyMaskEmail } = require('./renderer/accountIdentity');
 const { vendorColors: historyVendorColors } = require('../shared/vendorPresentation');
 const { createMemoryOptimizer } = require('./memoryOptimizer');
+const { createDeferredMainWindowPush } = require('./deferredMainWindowPush');
 const {
   createSessionProxyApplier,
   createProxyReadyFetch,
@@ -944,10 +945,8 @@ function electronUsageConfig(errorPrefix) {
     // by itself; TOKEN_MONITOR_WATCH_POLLING overrides in both directions.
     watchTriggersCollection: collectorWatchTriggersCollection(),
     intervalRequiresActivity: collectorIntervalRequiresActivity(),
-    watchDebounceMs: () => {
-      const isHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized();
-      return isHidden ? 15000 : 1500;
-    },
+    // Fixed debounce avoids function serialization failures in worker/config boundaries and matches the 3-5s update SLA
+    watchDebounceMs: 1500,
     dailyHistoryArchiveWriteEnabled: () => !isExternalAgentActive(),
     onError: (error, reason) => console.log(`[${errorPrefix}] ${reason}: ${error.message}`),
     logger: (message) => console.log(`[${errorPrefix}] ${message}`)
@@ -5199,9 +5198,6 @@ function publishLocalSessionActivity(patch) {
   sendPush({ event: 'session-activity', data: { patch: visiblePatch, snapshot } });
 }
 
-let deferredMainWindowStatsPayload = null;
-let deferredMainWindowStatusPayload = null;
-
 function isMainWindowActivelyVisible() {
   return Boolean(
     mainWindow &&
@@ -5218,18 +5214,6 @@ function shouldPerformBackgroundMemoryTrim() {
   }
   if (edgeDockController?.isRunning()) return false;
   return true;
-}
-
-function flushDeferredStatsToMainWindow(win = mainWindow) {
-  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-  if (deferredMainWindowStatusPayload) {
-    try { win.webContents.send('stats:push', deferredMainWindowStatusPayload); } catch (_) {}
-    deferredMainWindowStatusPayload = null;
-  }
-  if (deferredMainWindowStatsPayload) {
-    try { win.webContents.send('stats:push', deferredMainWindowStatsPayload); } catch (_) {}
-    deferredMainWindowStatsPayload = null;
-  }
 }
 
 function getActiveWatcherPid() {
@@ -5330,14 +5314,13 @@ function sendPush(payload, options = {}) {
     const deferred = payload?.data?.stats;
     sendMainWindowEvent('stats:push', rendererPayload, () => !deferred || latestStats === deferred);
   } else if (mainWindow && !mainWindow.isDestroyed()) {
-    // Defer stats delivery when main window is hidden/minimized to reduce
-    // renderer work; flush on show/restore (see memory optimization hooks).
-    if (isMainWindowActivelyVisible()) {
+    if (typeof deliverMainWindowStatsPush === 'function')
+    {
+      deliverMainWindowStatsPush(rendererPayload, mainWindow);
+    }
+    else
+    {
       try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
-    } else if (payload?.event === 'status') {
-      deferredMainWindowStatusPayload = rendererPayload;
-    } else {
-      deferredMainWindowStatsPayload = rendererPayload;
     }
   }
   if (payload?.data?.stats) {
@@ -6624,13 +6607,13 @@ function refreshLimitStatsPresentation() {
       event: 'stats',
       data: { type: 'stats', reason: 'presentation', mode, stats: rendererSnapshots.stamp(latestStats, rendererStats(visibleStats)) }
     };
-    // Defer when hidden to reduce renderer work (see memory optimization hooks)
-    if (isMainWindowActivelyVisible()) {
-      try {
-        mainWindow.webContents.send('stats:push', payload);
-      } catch (_) {}
-    } else {
-      deferredMainWindowStatsPayload = payload;
+    if (typeof deliverMainWindowStatsPush === 'function')
+    {
+      deliverMainWindowStatsPush(payload, mainWindow);
+    }
+    else
+    {
+      try { mainWindow.webContents.send('stats:push', payload); } catch (_) {}
     }
   }
 }
@@ -7822,6 +7805,38 @@ async function installDownloadedAppUpdate() {
   return deriveAppUpdateState();
 }
 
+const deferredMainWindowPush = createDeferredMainWindowPush();
+
+function deliverMainWindowStatsPush(payload, win = mainWindow)
+{
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed())
+  {
+    return;
+  }
+  deferredMainWindowPush.deliver(payload, {
+    isVisible: () => win === mainWindow && isMainWindowActivelyVisible(),
+    send: (nextPayload) =>
+    {
+      try { win.webContents.send('stats:push', nextPayload); } catch (_) {}
+    }
+  });
+}
+
+function flushDeferredStatsToMainWindow(win = mainWindow)
+{
+  if (!win || win !== mainWindow || win.isDestroyed() || win.webContents.isDestroyed())
+  {
+    return;
+  }
+  deferredMainWindowPush.flush({
+    canSend: () => win === mainWindow && !win.isDestroyed() && !win.webContents.isDestroyed() && isMainWindowActivelyVisible(),
+    send: (nextPayload) =>
+    {
+      try { win.webContents.send('stats:push', nextPayload); } catch (_) {}
+    }
+  });
+}
+
 // The one URL the edge dock can ask for: the Codex reset forecast row is the
 // Limits page's row, and that row is a link to its source.
 const CODEX_RESET_FORECAST_SOURCE_URL = 'https://codex-resets.com/';
@@ -8007,6 +8022,7 @@ function createWindow(boundsOverride, options = {}) {
   // The dock's own windows would otherwise keep the process alive after the
   // last real window closes, which window-all-closed relies on for quitting.
   win.on('closed', () => {
+    if (win === mainWindow || !mainWindow || mainWindow.isDestroyed()) deferredMainWindowPush.clear();
     if (quitRequested || process.platform === 'darwin') return;
     if (BaseWindow.getAllWindows().every((other) => (edgeDockController?.owns(other) || notchController?.owns(other)))) app.quit();
   });
@@ -8017,8 +8033,8 @@ function createWindow(boundsOverride, options = {}) {
   // Memory optimization hooks: separate listeners to avoid merge conflicts
   // with upstream's plugin-visibility handlers above.
   win.on('show', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
-  win.on('hide', () => scheduleBackgroundMemoryTrim(10000, false));
-  win.on('minimize', () => scheduleBackgroundMemoryTrim(10000, false));
+  win.on('hide', () => { deferredMainWindowPush.cancelFlush(); scheduleBackgroundMemoryTrim(10000, false); });
+  win.on('minimize', () => { deferredMainWindowPush.cancelFlush(); scheduleBackgroundMemoryTrim(10000, false); });
   win.on('restore', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
   if (!options.previousWindow) win.webContents.on('did-finish-load', () => {
     sendFloatingBubbleState();
