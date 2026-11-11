@@ -1258,6 +1258,7 @@ function formatLiveTokenRate(value) {
 }
 
 function renderLiveTokenRate() {
+  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden()) return;
   if (!els.liveTokenRate || !els.liveTokenRateValue) return;
   const enabled = state.settings?.showLiveTokenRate === true;
   if (!enabled) {
@@ -8333,6 +8334,7 @@ function settleRefreshButtonState(status) {
 
 async function refreshStats(options = {}) {
   const feedback = options.feedback === true;
+  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden() && !feedback) return;
   if (feedback) {
     if (state.refreshBusy) return;
     state.refreshBusy = true;
@@ -8464,14 +8466,37 @@ function renderBreakdownChange(breakdown, options = {}) {
   return true;
 }
 
+function stopRefreshTimer() {
+  if (state.refreshTimer) {
+    clearInterval(state.refreshTimer);
+    state.refreshTimer = null;
+  }
+  state.refreshTimerIntervalMs = null;
+}
+
 function restartTimer() {
+  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden()) {
+    if (typeof stopRefreshTimer === 'function') {
+      stopRefreshTimer();
+    } else if (state.refreshTimer) {
+      clearInterval(state.refreshTimer);
+      state.refreshTimer = null;
+      state.refreshTimerIntervalMs = null;
+    }
+    return;
+  }
   const interval = state.streamConnected
     ? 5 * 60 * 1000
     : Number(state.settings?.refreshMs || 15000);
   // Local pushes can arrive every few seconds. Keep the existing deadline so
   // they cannot indefinitely postpone the fallback read from the Hub.
   if (state.refreshTimer && state.refreshTimerIntervalMs === interval) return;
-  if (state.refreshTimer) clearInterval(state.refreshTimer);
+  if (typeof stopRefreshTimer === 'function') {
+    stopRefreshTimer();
+  } else if (state.refreshTimer) {
+    clearInterval(state.refreshTimer);
+    state.refreshTimer = null;
+  }
   state.refreshTimerIntervalMs = interval;
   // Only this periodic fallback may reuse fresh stream data instead of downloading.
   state.refreshTimer = setInterval(() => refreshStats({ streamCache: true }), interval);
@@ -15843,6 +15868,12 @@ function handleWindowVisibilityChange() {
   if (!statsRenderScheduler.visibilityChanged()) return;
   if (isRendererWindowHidden()) cancelTokenRateBoost();
   else applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
+  if (isRendererWindowHidden()) {
+    if (typeof clearLiveTokenRateTimers === 'function') clearLiveTokenRateTimers();
+    if (typeof stopRefreshTimer === 'function') stopRefreshTimer();
+  } else {
+    if (typeof restartTimer === 'function') restartTimer();
+  }
   if (!isRendererWindowHidden() && state.settings?.hubMode === 'client' && hubBuildStatusRefreshDue()) {
     void refreshHubBuildStatus();
   }
