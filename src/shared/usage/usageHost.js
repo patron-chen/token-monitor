@@ -247,7 +247,10 @@ function createUsageHostCoordinator(deps = {}) {
       }
       let spawned;
       try {
-        spawned = new WorkerClass(workerPath, { workerData });
+        spawned = new WorkerClass(workerPath, {
+          workerData,
+          execArgv: ['--optimize-for-size', '--max-old-space-size=64', '--expose-gc']
+        });
       } catch (error) {
         fallBack(error);
         resolveExit();
@@ -278,6 +281,17 @@ function createUsageHostCoordinator(deps = {}) {
         if (collector) return collector.getDiagnostics();
         const latest = diagnostics || { state: 'running' };
         return stopped ? { ...latest, state: 'stopped' } : latest;
+      },
+      getWatcherPid() {
+        if (collector) {
+          try {
+            const { getWatcherWorkerPid } = require('../watcherHost');
+            return getWatcherWorkerPid?.() || null;
+          } catch (_) {
+            return null;
+          }
+        }
+        return diagnostics?.watcherPid || null;
       },
       // The session archive state the worker's transform last reported; null
       // once the in-process collector took over and the owner's own transform

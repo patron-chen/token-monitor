@@ -186,6 +186,16 @@ test('Cursor does not reopen the database for sessions the fingerprint already m
   assert.equal(second.size, 0);
   assert.equal(opens, 1, 'a definitive miss is cached per fingerprint, so the DB is not reopened');
   assert.ok(queries > 0);
+
+  const manyMisses = new Set(Array.from({ length: 2001 }, (_, index) => `missing-${index}`));
+  resolveSessionMetadata(manyMisses, { home, deps });
+  const cached = deps.cursorTitleCache.get(dbPath);
+  assert.equal(cached.misses.size, 2000, 'miss caching stays bounded after a large lookup');
+  assert.equal(cached.misses.has('missing-0'), false);
+  assert.equal(cached.misses.has('missing-2000'), true);
+  const opensAfterLargeLookup = opens;
+  resolveSessionMetadata(new Set(['missing-2000']), { home, deps });
+  assert.equal(opens, opensAfterLargeLookup, 'the newest cached miss still avoids SQLite');
 });
 
 test('Cursor WAL turn boundaries stop and reopen the indicator without changing accounting', { skip: !sqlite }, (t) => {
