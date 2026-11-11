@@ -151,3 +151,29 @@ test('live full stats push after reveal cancels stale deferred stats and activit
   assert.deepEqual(sent.map((item) => item.event), ['stats', 'status']);
   assert.equal(sent[0].data.stats.totalTokens, 200);
 });
+
+test('immediate flush delivers pending snapshots synchronously without waiting for reveal settle delay', () =>
+{
+  const clock = makeFakeClock();
+  const queue = createDeferredMainWindowPush({
+    delayMs: 50,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer
+  });
+  const sent = [];
+
+  queue.deliver({ event: 'stats', data: { stats: { totalTokens: 42 } } }, {
+    isVisible: () => false,
+    send: (payload) => sent.push(payload)
+  });
+
+  queue.flush({
+    immediate: true,
+    canSend: () => true,
+    send: (payload) => sent.push(payload)
+  });
+
+  assert.equal(clock.count(), 0);
+  assert.deepEqual(sent.map((item) => item.data.stats.totalTokens), [42]);
+  assert.equal(queue.hasPending(), false);
+});
