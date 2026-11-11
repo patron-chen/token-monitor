@@ -54,6 +54,7 @@ const { LIMIT_PROVIDER_CATALOG: historyProviderCatalog } = require('../shared/li
 const { isLimitWindowHidden: historyWindowHidden } = require('../shared/limits/usageItems');
 const { maskEmailAddress: historyMaskEmail } = require('./renderer/accountIdentity');
 const { vendorColors: historyVendorColors } = require('../shared/vendorPresentation');
+const { createMemoryOptimizer } = require('./memoryOptimizer');
 const {
   createSessionProxyApplier,
   createProxyReadyFetch,
@@ -81,6 +82,13 @@ const {
 // a closed parent pipe turns the next log call into an unhandled 'error'
 // event and Electron pops a "JavaScript error in the main process" dialog.
 installSafeStdout();
+
+// Configure Chromium and V8 runtime memory switches before app.whenReady()
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128 --expose-gc');
+app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess');
+app.commandLine.appendSwitch('renderer-process-limit', '1');
+
+const memoryOptimizer = createMemoryOptimizer();
 const electronClaudeWebFetch = createProxyReadyFetch(createClaudeWebFetch(net), () => sessionProxy.ensureReady());
 const electronWorkbuddyLocalAuth = createWorkbuddyLocalAuth({
   fetch: electronLimitsFetch()
@@ -154,6 +162,7 @@ const {
   antigravitySyncLockPath,
   repairAntigravitySyncLock
 } = require('../shared/providers/antigravity/selfSync');
+const { getWatcherWorkerPid } = require('../shared/watcherHost');
 const { deviceRecordFromAnchor } = require('../shared/anchorSeed');
 const { sendWhenRendererReady } = require('./deferredWindowSend');
 const { actionWindowForEvent, activateWindowAction, handoffWindow, showWindow } = require('./windowLifecycle');
@@ -935,7 +944,10 @@ function electronUsageConfig(errorPrefix) {
     // by itself; TOKEN_MONITOR_WATCH_POLLING overrides in both directions.
     watchTriggersCollection: collectorWatchTriggersCollection(),
     intervalRequiresActivity: collectorIntervalRequiresActivity(),
-    watchDebounceMs: 1500,
+    watchDebounceMs: () => {
+      const isHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized();
+      return isHidden ? 15000 : 1500;
+    },
     dailyHistoryArchiveWriteEnabled: () => !isExternalAgentActive(),
     onError: (error, reason) => console.log(`[${errorPrefix}] ${reason}: ${error.message}`),
     logger: (message) => console.log(`[${errorPrefix}] ${message}`)
@@ -5187,6 +5199,90 @@ function publishLocalSessionActivity(patch) {
   sendPush({ event: 'session-activity', data: { patch: visiblePatch, snapshot } });
 }
 
+let deferredMainWindowStatsPayload = null;
+let deferredMainWindowStatusPayload = null;
+
+function isMainWindowActivelyVisible() {
+  return Boolean(
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    (typeof mainWindow.isVisible !== 'function' || mainWindow.isVisible()) &&
+    (typeof mainWindow.isMinimized !== 'function' || !mainWindow.isMinimized())
+  );
+}
+
+function shouldPerformBackgroundMemoryTrim() {
+  if (isMainWindowActivelyVisible()) return false;
+  if (dashboardWindow && !dashboardWindow.isDestroyed() && dashboardWindow.isVisible() && !dashboardWindow.isMinimized()) {
+    return false;
+  }
+  if (edgeDockController?.isRunning()) return false;
+  return true;
+}
+
+function flushDeferredStatsToMainWindow(win = mainWindow) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  if (deferredMainWindowStatusPayload) {
+    try { win.webContents.send('stats:push', deferredMainWindowStatusPayload); } catch (_) {}
+    deferredMainWindowStatusPayload = null;
+  }
+  if (deferredMainWindowStatsPayload) {
+    try { win.webContents.send('stats:push', deferredMainWindowStatsPayload); } catch (_) {}
+    deferredMainWindowStatsPayload = null;
+  }
+}
+
+function getActiveWatcherPid() {
+  try {
+    const pid = latestUsageHost?.getWatcherPid?.();
+    if (pid) return pid;
+  } catch (_) {}
+  try {
+    return getWatcherWorkerPid?.() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function scheduleBackgroundMemoryTrim(delayMs = 1500, force = false) {
+  if (typeof memoryOptimizer === 'undefined' || !shouldPerformBackgroundMemoryTrim()) return;
+  memoryOptimizer.scheduleTrim(() => {
+    if (!shouldPerformBackgroundMemoryTrim()) return [];
+    const pids = [];
+    try {
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+        const rendererPid = typeof mainWindow.webContents.getOSProcessId === 'function' ? mainWindow.webContents.getOSProcessId() : null;
+        if (rendererPid) pids.push(rendererPid);
+      }
+    } catch (_) {}
+    try {
+      if (typeof app?.getAppMetrics === 'function') {
+        const metrics = app.getAppMetrics();
+        for (const m of metrics) {
+          // Never trim the GPU process working set as it forces DirectX/DirectComposition surface purges
+          if (m?.pid && m.pid !== process.pid && m?.type !== 'GPU') pids.push(m.pid);
+        }
+      }
+    } catch (_) {}
+    try {
+      const watcherPid = getActiveWatcherPid();
+      if (watcherPid && !pids.includes(watcherPid)) pids.push(watcherPid);
+    } catch (_) {}
+    return pids;
+  }, delayMs, force);
+}
+
+let backgroundTrimTicker = null;
+function ensureBackgroundTrimTicker() {
+  if (backgroundTrimTicker) return;
+  backgroundTrimTicker = setInterval(() => {
+    if (shouldPerformBackgroundMemoryTrim()) {
+      scheduleBackgroundMemoryTrim(1000);
+    }
+  }, 300000);
+  backgroundTrimTicker.unref?.();
+}
+
 // Two options, both for the cold-start seed and neither for live stats.
 // `skipExport` keeps a republished snapshot from spending the auto-export
 // interval that this run's first real scan needs. `deferToRenderer` waits for
@@ -5234,7 +5330,15 @@ function sendPush(payload, options = {}) {
     const deferred = payload?.data?.stats;
     sendMainWindowEvent('stats:push', rendererPayload, () => !deferred || latestStats === deferred);
   } else if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
+    // Defer stats delivery when main window is hidden/minimized to reduce
+    // renderer work; flush on show/restore (see memory optimization hooks).
+    if (isMainWindowActivelyVisible()) {
+      try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
+    } else if (payload?.event === 'status') {
+      deferredMainWindowStatusPayload = rendererPayload;
+    } else {
+      deferredMainWindowStatsPayload = rendererPayload;
+    }
   }
   if (payload?.data?.stats) {
     const nextHistoryRevision = statsHistoryRevision(payload.data.stats);
@@ -6512,12 +6616,18 @@ function refreshLimitStatsPresentation() {
   repaintDockSurfaces();
   updateTrayDisplay();
   if (mainWindow && !mainWindow.isDestroyed()) {
-    try {
-      mainWindow.webContents.send('stats:push', {
-        event: 'stats',
-        data: { type: 'stats', reason: 'presentation', mode, stats: rendererSnapshots.stamp(latestStats, rendererStats(visibleStats)) }
-      });
-    } catch (_) {}
+    const payload = {
+      event: 'stats',
+      data: { type: 'stats', reason: 'presentation', mode, stats: rendererSnapshots.stamp(latestStats, rendererStats(visibleStats)) }
+    };
+    // Defer when hidden to reduce renderer work (see memory optimization hooks)
+    if (isMainWindowActivelyVisible()) {
+      try {
+        mainWindow.webContents.send('stats:push', payload);
+      } catch (_) {}
+    } else {
+      deferredMainWindowStatsPayload = payload;
+    }
   }
 }
 
@@ -7813,7 +7923,9 @@ function createWindow(boundsOverride, options = {}) {
       preload: path.join(__dirname, 'preload.js'),
       zoomFactor: clampZoom(settings.zoomFactor),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Retain the compositor frame buffer when hidden so reopening from tray never flashes
+      backgroundThrottling: false
     }
   };
   const win = process.platform === 'win32'
@@ -7898,6 +8010,12 @@ function createWindow(boundsOverride, options = {}) {
   win.on('hide', () => syncPluginWindowVisibility(win));
   win.on('minimize', () => syncPluginWindowVisibility(win));
   win.on('restore', () => syncPluginWindowVisibility(win));
+  // Memory optimization hooks: separate listeners to avoid merge conflicts
+  // with upstream's plugin-visibility handlers above.
+  win.on('show', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
+  win.on('hide', () => scheduleBackgroundMemoryTrim(10000, false));
+  win.on('minimize', () => scheduleBackgroundMemoryTrim(10000, false));
+  win.on('restore', () => { memoryOptimizer.cancelScheduledTrim(); flushDeferredStatsToMainWindow(win); });
   if (!options.previousWindow) win.webContents.on('did-finish-load', () => {
     sendFloatingBubbleState();
     // Only report a window that is already on screen. A window still awaiting its
@@ -8033,7 +8151,9 @@ function createDashboardWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Retain the compositor frame buffer when hidden so reopening from tray never flashes
+      backgroundThrottling: false
     }
   };
   const win = new BrowserWindow(windowOptions);
@@ -8194,7 +8314,11 @@ app.whenReady().then(() => {
   fs.promises.rm(path.join(sharedDataDir(), 'tokscale'), { recursive: true, force: true })
     .catch((error) => console.log(`[tokscale] removing retired npm downloads failed: ${error.message}`));
   ensureTray();
-  if (settings.trayMode) enterTrayMode();
+  ensureBackgroundTrimTicker();
+  if (settings.trayMode) {
+    enterTrayMode();
+    scheduleBackgroundMemoryTrim(5000, true);
+  }
   regenerateTokscalePricing();
   if (widgetRuntimeSupported) ensureMacWidgetDemand();
   startMode();

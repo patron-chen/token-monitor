@@ -145,7 +145,17 @@ function applyTokscaleSessionMetadata(json, { resolveProjects = true } = {}) {
   return result;
 }
 
+const PROJECT_PATH_CACHE_LIMIT = 1000;
 const projectPathCache = new Map();
+
+function setProjectPathCache(filePath, entry) {
+  projectPathCache.delete(filePath);
+  if (projectPathCache.size >= PROJECT_PATH_CACHE_LIMIT) {
+    const oldestKey = projectPathCache.keys().next().value;
+    projectPathCache.delete(oldestKey);
+  }
+  projectPathCache.set(filePath, entry);
+}
 
 function projectPathFromJsonl(filePath) {
   let text;
@@ -154,7 +164,11 @@ function projectPathFromJsonl(filePath) {
     const stat = fs.statSync(filePath);
     cacheKey = `${stat.size}:${stat.mtimeMs}`;
     const cached = projectPathCache.get(filePath);
-    if (cached?.key === cacheKey) return cached.value;
+    if (cached?.key === cacheKey) {
+      projectPathCache.delete(filePath);
+      projectPathCache.set(filePath, cached);
+      return cached.value;
+    }
     if (isCompressedCodexTranscript(filePath)) {
       text = readCompressedCodexTranscript(filePath).subarray(0, 256 * 1024).toString('utf8');
     } else {
@@ -175,12 +189,12 @@ function projectPathFromJsonl(filePath) {
       const value = payload.cwd || payload.project_path || payload.projectPath || payload.workingDirectory || payload.working_directory;
       if (typeof value === 'string' && value.trim()) {
         const result = value.trim();
-        projectPathCache.set(filePath, { key: cacheKey, value: result });
+        setProjectPathCache(filePath, { key: cacheKey, value: result });
         return result;
       }
     } catch (_) { /* skip partial or non-JSON lines */ }
   }
-  projectPathCache.set(filePath, { key: cacheKey, value: '' });
+  setProjectPathCache(filePath, { key: cacheKey, value: '' });
   return '';
 }
 
@@ -205,6 +219,7 @@ function projectIdentity(value) {
 
 // This cache intentionally outlives one collection tick, so idle JSONL
 // sessions do not need to be reopened.
+const JSONL_TIMESTAMP_CACHE_LIMIT = 1000;
 const jsonlTimestampCache = new Map();
 
 function lastJsonlTimestamp(filePath) {
@@ -212,7 +227,11 @@ function lastJsonlTimestamp(filePath) {
   try { stat = fs.statSync(filePath); } catch (_) { return ''; }
   const cacheKey = `${stat.size}:${stat.mtimeMs}`;
   const cached = jsonlTimestampCache.get(filePath);
-  if (cached?.key === cacheKey) return cached.value;
+  if (cached?.key === cacheKey) {
+    jsonlTimestampCache.delete(filePath);
+    jsonlTimestampCache.set(filePath, cached);
+    return cached.value;
+  }
   const tail = readFileTail(filePath);
   if (isCompressedCodexTranscript(filePath) && !tail) return '';
   const lines = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -222,6 +241,11 @@ function lastJsonlTimestamp(filePath) {
     if (timestamp) { value = timestamp; break; }
   }
   if (!value) value = stat.mtime.toISOString();
+  jsonlTimestampCache.delete(filePath);
+  if (jsonlTimestampCache.size >= JSONL_TIMESTAMP_CACHE_LIMIT) {
+    const oldestKey = jsonlTimestampCache.keys().next().value;
+    jsonlTimestampCache.delete(oldestKey);
+  }
   jsonlTimestampCache.set(filePath, { key: cacheKey, value });
   return value;
 }
