@@ -16,6 +16,7 @@ function resolveSqlite(deps) {
 }
 
 const titleCache = new Map();
+const CURSOR_TITLE_CACHE_LIMIT = 2000;
 
 function fileStamp(filePath) {
   try {
@@ -192,6 +193,19 @@ function readTitles(dbPath, sqlite, wantedIds, cache, now = Date.now(), periods)
   }
 }
 
+function cacheTitleReads(cached, read) {
+  for (const [id, title] of read.titles) {
+    cached.titles.delete(id);
+    cached.titles.set(id, title);
+    if (cached.titles.size > CURSOR_TITLE_CACHE_LIMIT) cached.titles.delete(cached.titles.keys().next().value);
+  }
+  for (const id of read.misses) {
+    cached.misses.delete(id);
+    cached.misses.add(id);
+    if (cached.misses.size > CURSOR_TITLE_CACHE_LIMIT) cached.misses.delete(cached.misses.values().next().value);
+  }
+}
+
 function resolveSessionMetadata(sessionIds, { deps = {}, home, now = Date.now(), periods, metadata = deps.metadataCache } = {}) {
   const result = new Map();
   const sqlite = resolveSqlite(deps);
@@ -226,9 +240,8 @@ function resolveSessionMetadata(sessionIds, { deps = {}, home, now = Date.now(),
     if (wanted.size > 0) {
       const read = readTitles(dbPath, sqlite, wanted, cached, now, periods);
       if (read) {
-        for (const [id, title] of read.titles) cached.titles.set(id, title);
+        cacheTitleReads(cached, read);
         for (const [id, title] of read.retries) retries.set(id, title);
-        for (const id of read.misses) cached.misses.add(id);
         if (!read.turnReadFailed) {
           for (const id of wanted) cached.turnEnds.delete(id);
         }
@@ -248,6 +261,7 @@ function resolveSessionMetadata(sessionIds, { deps = {}, home, now = Date.now(),
         }
       }
     }
+    cache.delete(dbPath);
     cache.set(dbPath, cached);
     for (const sessionId of sessionIds) {
       const title = cached.titles.get(sessionId) || retries.get(sessionId);
