@@ -15137,6 +15137,11 @@ function handleWindowVisibilityChange() {
     if (typeof stopRefreshTimer === 'function') stopRefreshTimer();
   } else {
     if (typeof restartTimer === 'function') restartTimer();
+    // Immediately hydrate stats on reveal in case startup ran hidden or queued updates lagged.
+    if (typeof refreshStats === 'function')
+    {
+      void refreshStats();
+    }
   }
   if (!isRendererWindowHidden() && state.settings?.hubMode === 'client' && hubBuildStatusRefreshDue()) {
     void refreshHubBuildStatus();

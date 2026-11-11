@@ -88,6 +88,14 @@ function createUsageHostCoordinator(deps = {}) {
 
     const collectorOptions = { ...options };
     for (const key of CALLER_OPTION_KEYS) delete collectorOptions[key];
+    // Strip any remaining function-valued options before structured-cloning workerData
+    for (const [key, value] of Object.entries(collectorOptions))
+    {
+      if (typeof value === 'function')
+      {
+        delete collectorOptions[key];
+      }
+    }
     const archiveWritesYieldToAgent = typeof options.dailyHistoryArchiveWriteEnabled === 'function';
     if (!archiveWritesYieldToAgent && options.dailyHistoryArchiveWriteEnabled !== undefined) {
       collectorOptions.dailyHistoryArchiveWriteEnabled = options.dailyHistoryArchiveWriteEnabled;
@@ -247,10 +255,9 @@ function createUsageHostCoordinator(deps = {}) {
       }
       let spawned;
       try {
-        spawned = new WorkerClass(workerPath, {
-          workerData,
-          execArgv: ['--optimize-for-size', '--max-old-space-size=64', '--expose-gc']
-        });
+        // Avoid passing V8 execArgv flags rejected by Node/Electron worker_threads (ERR_WORKER_INVALID_EXEC_ARGV);
+        // the worker trims memory internally via node:inspector/promises when idle.
+        spawned = new WorkerClass(workerPath, { workerData });
       } catch (error) {
         fallBack(error);
         resolveExit();
