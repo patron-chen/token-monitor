@@ -8,4 +8,7 @@ const test = require('node:test');
 test('release needs every build to succeed', () => {
   const workflow = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'sync-and-release.yml'), 'utf8');
   assert.match(workflow, /needs\.build\.result == 'success'/);
+  assert.match(workflow, /npm run lint/);
+  assert.match(workflow, /tests\/shared\/usageHost\.test\.js/);
+  assert.match(workflow, /node scripts\/verify-vendored-tokscale\.js/);
 });

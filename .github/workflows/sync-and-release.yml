@@ -176,8 +176,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify lint and usage runtime tests
+        run: |
+          npm run lint
+          node --test tests/shared/usageHost.test.js tests/electron/deferredMainWindowPush.test.js tests/electron/sessionActivity.test.js tests/electron/sessionTitleDisplay.test.js tests/electron/syncReleaseWorkflow.test.js
+
       - name: Ensure vendored tokscale
         run: node scripts/ensure-vendored-tokscale.js
+
+      - name: Verify vendored tokscale
+        run: node scripts/verify-vendored-tokscale.js
 
       - name: Set Linux environment
         if: matrix.target == 'linux'
