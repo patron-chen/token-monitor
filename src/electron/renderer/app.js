@@ -8068,7 +8068,8 @@ function settleRefreshButtonState(status) {
 
 async function refreshStats(options = {}) {
   const feedback = options.feedback === true;
-  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden() && !feedback) return;
+  // Allow cold-start hydration while hidden so state.stats never stays null when opened from tray.
+  if (typeof isRendererWindowHidden === 'function' && isRendererWindowHidden() && !feedback && state.stats) return;
   if (feedback) {
     if (state.refreshBusy) return;
     state.refreshBusy = true;

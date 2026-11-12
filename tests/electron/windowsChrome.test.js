@@ -47,11 +47,6 @@ function fakeApi(calls)
     {
       calls.push(['cloak', hwnd, cloaked]);
       return true;
-    },
-    showNative(hwnd, inactive)
-    {
-      calls.push(['showNative', hwnd, inactive]);
-      return true;
     }
   };
 }
@@ -83,7 +78,7 @@ class FakeNativeWindow extends EventEmitter
   destroy() { this.destroyed = true; this.emit('closed'); }
 }
 
-test('cloaked first reveal uncloaks after settling and subsequent opens use native ShowWindow without Electron show()', () =>
+test('cloaked first reveal uncloaks after settling and subsequent reopens re-cloak across Electron show()', () =>
 {
   const win = new FakeNativeWindow();
   const apiCalls = [];
@@ -114,18 +109,21 @@ test('cloaked first reveal uncloaks after settling and subsequent opens use nati
   win.show();
   assert.deepEqual(win.calls, ['baseShow', 'focus', 'focus']);
 
-  // Hide and reopen from tray: must use native ShowWindow(SW_SHOW), emit 'show', focus, and never call baseShow().
+  // Hide and reopen from tray: must call baseShow() under DWM cloak so WebContentsView wakes cleanly.
   let showEvents = 0;
   win.on('show', () => { showEvents += 1; });
   win.hide();
   win.show();
   assert.equal(beforeShowCount, 2);
   assert.equal(showEvents, 1);
-  assert.deepEqual(apiCalls.slice(-1), [['showNative', 0x1234n, false]]);
-  assert.deepEqual(win.calls, ['baseShow', 'focus', 'focus', 'hide', 'focus']);
+  assert.equal(isWindowsWindowCloaked(win), true);
+  assert.equal(clock.flushNext(), true);
+  assert.equal(isWindowsWindowCloaked(win), false);
+  assert.deepEqual(apiCalls.slice(-2), [['cloak', 0x1234n, true], ['cloak', 0x1234n, false]]);
+  assert.deepEqual(win.calls, ['baseShow', 'focus', 'focus', 'hide', 'baseShow', 'focus']);
 });
 
-test('silent tray pre-warm uses cloaked showInactive, hides before uncloaking, and opens via ShowWindow on click', () =>
+test('silent tray pre-warm uses cloaked showInactive, hides before uncloaking, and opens via cloaked baseShow on click', () =>
 {
   const win = new FakeNativeWindow();
   const apiCalls = [];
@@ -159,8 +157,12 @@ test('silent tray pre-warm uses cloaked showInactive, hides before uncloaking, a
   assert.deepEqual(win.calls, ['baseShowInactive', 'hide']);
 
   win.show();
-  assert.deepEqual(apiCalls.slice(-1), [['showNative', 0x1234n, false]]);
-  assert.deepEqual(win.calls, ['baseShowInactive', 'hide', 'focus']);
+  assert.equal(isWindowsWindowCloaked(win), true);
+  assert.equal(win.isVisible(), true);
+  clock.flushNext();
+  assert.equal(isWindowsWindowCloaked(win), false);
+  assert.deepEqual(apiCalls.slice(-2), [['cloak', 0x1234n, true], ['cloak', 0x1234n, false]]);
+  assert.deepEqual(win.calls, ['baseShowInactive', 'hide', 'baseShow', 'focus']);
 });
 
 test('a tray click during silent pre-warm cancels the auto-hide and promotes cleanly on uncloak', () =>

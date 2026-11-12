@@ -12,12 +12,12 @@
 //      Win32 BaseWindow/BrowserWindow show() runs a ~200-290ms compositor fade /
 //      surface-attach ramp on transparent hosts (blank acrylic slab or black/
 //      dim ramp) on initial open AND every hide->show tray reopen. Cloaking the
-//      HWND (DWMWA_CLOAK) across the one-time native show initialization and
-//      reopening hidden warmed hosts directly with ShowWindow(SW_SHOW/SW_SHOWNA)
-//      + win.focus() keeps full desktop transparency without visual flashes.
+//      HWND (DWMWA_CLOAK) across Electron's show()/showInactive() settle window
+//      wakes WebContentsView in Chromium while keeping the reveal invisible
+//      until the compositor has drawn a live frame.
 //
-// macOS / Linux: every entry point no-ops. koffi, dwmapi.dll and user32.dll are
-// loaded lazily and guarded, so missing native APIs never break window flows.
+// macOS / Linux: every entry point no-ops. koffi and dwmapi.dll are loaded
+// lazily and guarded, so missing native APIs never break window flows.
 
 const DWMWA_TRANSITIONS_FORCEDISABLED = 3; // dwmapi.h, Vista+
 const DWMWA_CLOAK = 13; // dwmapi.h, Windows 8+ (covers Win10 & Win11)
@@ -26,8 +26,6 @@ const DWMWCP_ROUND = 2;
 const DWMWA_BORDER_COLOR = 34; // dwmapi.h, Windows 11 Build 22000+
 const DWMWA_COLOR_NONE = 0xfffffffe;
 
-const SW_SHOW = 5;
-const SW_SHOWNA = 8;
 const INITIAL_REVEAL_SETTLE_MS = 260;
 
 // null = not yet probed, false = unavailable, object = ready
@@ -58,11 +56,9 @@ function loadNativeChromeApi()
   {
     const koffi = require('koffi');
     const dwmapi = koffi.load('dwmapi.dll');
-    const user32 = koffi.load('user32.dll');
     const DwmSetWindowAttribute = dwmapi.func(
       'int DwmSetWindowAttribute(uintptr_t hwnd, uint dwAttribute, void *pvAttribute, uint cbAttribute)'
     );
-    const ShowWindow = user32.func('bool ShowWindow(uintptr_t hWnd, int nCmdShow)');
     const setUint = (hwnd, attribute, value) =>
     {
       const buf = Buffer.alloc(4);
@@ -71,8 +67,7 @@ function loadNativeChromeApi()
     };
     nativeChromeApi = {
       setUint,
-      setCloak: (hwnd, cloaked) => setUint(hwnd, DWMWA_CLOAK, cloaked ? 1 : 0),
-      showNative: (hwnd, inactive) => ShowWindow(hwnd, inactive ? SW_SHOWNA : SW_SHOW)
+      setCloak: (hwnd, cloaked) => setUint(hwnd, DWMWA_CLOAK, cloaked ? 1 : 0)
     };
   }
   catch (_)
@@ -142,7 +137,7 @@ function runBeforeShow(state)
 }
 
 /**
- * Attaches Win32 cloaked warm-up and flash-free native ShowWindow reveal
+ * Attaches Win32 cloaked warm-up and flash-free Electron show reveal
  * handling to a single transparent window instance without altering prototypes.
  */
 function attachWindowsReveal(win, deps = {})
@@ -247,7 +242,7 @@ function attachWindowsReveal(win, deps = {})
     flushWaiters(state);
   };
 
-  const startCloakedInitialShow = ({ inactive = false, pendingHide = false } = {}) =>
+  const startCloakedShow = ({ inactive = false, pendingHide = false } = {}) =>
   {
     const hwnd = hwndOf(win);
     if (hwnd === null || !state.baseShow)
@@ -284,7 +279,7 @@ function attachWindowsReveal(win, deps = {})
       return false;
     }
     runBeforeShow(state);
-    startCloakedInitialShow({ inactive: true, pendingHide: true });
+    startCloakedShow({ inactive: true, pendingHide: true });
     return true;
   };
 
@@ -322,24 +317,12 @@ function attachWindowsReveal(win, deps = {})
 
     runBeforeShow(state);
 
-    if (state.status === 'ready' && !minimized)
+    // Always drive hidden BaseWindow + WebContentsView reveals through Electron's
+    // baseShow/baseShowInactive under DWM cloak: bypassing baseShow with raw Win32
+    // ShowWindow leaves Chromium's WebContentsView hidden and renders a blank window.
+    if ((state.status === 'unwarmed' || state.status === 'ready') && !minimized)
     {
-      const hwnd = hwndOf(win);
-      if (hwnd !== null && typeof state.api.showNative === 'function')
-      {
-        state.api.showNative(hwnd, !wantFocus);
-        win.emit?.('show');
-        if (wantFocus)
-        {
-          focusIfFocusable(win);
-        }
-        return;
-      }
-    }
-
-    if (state.status === 'unwarmed' && !minimized)
-    {
-      startCloakedInitialShow({ inactive, pendingHide: false });
+      startCloakedShow({ inactive, pendingHide: false });
       return;
     }
 

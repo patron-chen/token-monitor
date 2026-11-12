@@ -490,3 +490,61 @@ test('all stats refreshes use visibility-aware rendering', () => {
   assert.equal([...refreshStats.matchAll(/setStatus\(statusTextFor/g)].length, 1);
   assert.match(statsRender, /renderMimoStatus\(\);/);
 });
+
+test('refreshStats still hydrates initial empty state while window is hidden', async () => {
+  const app = fs.readFileSync(path.join(rendererDir, 'app.js'), 'utf8');
+  const source = app.slice(
+    app.indexOf('async function refreshStats(options = {})'),
+    app.indexOf('async function refreshStatusViewManually()')
+  );
+  let calls = 0;
+  let scheduled = 0;
+  const fakeStats = { totals: { totalTokens: 42 } };
+  const state = {
+    stats: null,
+    refreshBusy: false,
+    period: 'today',
+    floatingBubble: { collapsed: false },
+    mode: 'local',
+    streamConnected: false
+  };
+  const refreshStats = new vm.Script(`${source}\nrefreshStats;`).runInNewContext({
+    isRendererWindowHidden: () => true,
+    state,
+    window: {
+      tokenMonitor: {
+        async getStats() {
+          calls += 1;
+          return fakeStats;
+        }
+      }
+    },
+    observeLiveTokenRate() {},
+    allTimeSessions: { invalidate() {}, attach: (x) => x },
+    sessionStatsForDisplay: (x) => x,
+    observeDisplayLiveTokenRates() {},
+    applyCodexActiveAccountFromStats() {},
+    fixedPeriodRangesApi: { isDerived: () => false },
+    warmFixedPeriodHistory: async () => {},
+    statsRenderScheduler: { request() { scheduled += 1; } },
+    maybeUpdateBarsIcon() {},
+    clearRefreshButtonFeedbackTimer() {},
+    setRefreshButtonState() {},
+    settleRefreshButtonState() {},
+    setStatus() {},
+    statusTextFor: () => '',
+    clearTimeout,
+    console
+  });
+
+  await refreshStats();
+  assert.equal(calls, 1);
+  assert.equal(state.stats, fakeStats);
+  assert.equal(scheduled, 1);
+
+  await refreshStats();
+  assert.equal(calls, 1);
+
+  await refreshStats({ feedback: true });
+  assert.equal(calls, 2);
+});
