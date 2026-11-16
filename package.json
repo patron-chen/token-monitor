@@ -11,6 +11,7 @@
     "agent:once": "npm run ensure:tokscale && node src/agent/agent.js --once",
     "widget": "npm run ensure:tokscale && electron .",
     "dev": "npm run ensure:tokscale && electron .",
+    "ensure:deps": "node scripts/ensure-dependencies.js",
     "ensure:tokscale": "node scripts/ensure-vendored-tokscale.js",
     "test": "node --test \"tests/**/*.test.js\"",
     "test:coverage": "c8 npm test",

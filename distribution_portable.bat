@@ -6,6 +6,7 @@ pushd "%~dp0" || exit /b 1
 set "EXIT_CODE=0"
 set "PORTABLE_ONLY=0"
 set "SKIP_CHECKS=0"
+set "SKIP_INSTALL=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -19,6 +20,11 @@ if /I "%~1"=="--skip-checks" (
   shift
   goto :parse_args
 )
+if /I "%~1"=="--skip-install" (
+  set "SKIP_INSTALL=1"
+  shift
+  goto :parse_args
+)
 if /I "%~1"=="--help" goto :usage
 if /I "%~1"=="-h" goto :usage
 echo [ERROR] Unknown option: %~1
@@ -26,7 +32,7 @@ set "EXIT_CODE=1"
 goto :cleanup
 
 :usage
-echo Usage: distribution_portable.bat [--portable-only] [--skip-checks]
+echo Usage: distribution_portable.bat [--portable-only] [--skip-checks] [--skip-install]
 echo.
 echo Runs the standard Windows x64 release build ^(NSIS installer + Portable exe^)
 echo matching package.json "dist:win" and .github/workflows/release.yml preflight checks.
@@ -34,9 +40,28 @@ echo.
 echo Options:
 echo   --portable-only  Build only the portable .exe instead of NSIS + portable
 echo   --skip-checks    Skip sync:worker --check and eslint preflight checks
+echo   --skip-install   Skip automatic npm dependency installation and verification
 goto :cleanup
 
 :args_done
+:: Prefer 64-bit 7-Zip if available to avoid 32-bit DLL initialization issues
+if not defined ELECTRON_BUILDER_7ZIP_PATH (
+  if exist "C:\Program Files\7-Zip\7z.exe" set "ELECTRON_BUILDER_7ZIP_PATH=C:\Program Files\7-Zip\7z.exe"
+)
+
+if "%SKIP_INSTALL%"=="0" (
+  echo [Deps] Checking and synchronizing npm dependencies...
+  if not exist "node_modules\" (
+    call npm install
+    if errorlevel 1 goto :fail
+  ) else (
+    node scripts/ensure-dependencies.js
+    if errorlevel 1 goto :fail
+  )
+) else (
+  echo [Deps] Skipping dependency check ^(--skip-install^).
+)
+
 for /f "usebackq delims=" %%V in (`node -p "require('./package.json').version" 2^>nul`) do set "APP_VERSION=%%V"
 if not defined APP_VERSION (
   echo [ERROR] Failed to read package.json version. Ensure Node.js ^>=22.15.0 is on PATH.
