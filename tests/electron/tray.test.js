@@ -149,6 +149,9 @@ function trayDisplayFixture(platform = 'win32')
     },
     getDefaultTrayIcon: () => 'default',
     pluginRuntime: null,
+    LIMIT_PROVIDER_REGISTRY: [],
+    applyAccountOrder: providers => providers,
+    accountSlotService: null,
     require: id => (id.startsWith('./') ? require(path.join(__dirname, '../../src/electron', id)) : require(id))
   };
   vm.runInNewContext([
