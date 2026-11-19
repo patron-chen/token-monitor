@@ -420,8 +420,9 @@ function onBeforeWindowsReveal(win, handler)
 }
 
 // The collapsed floating bubble can be dragged anywhere, so it keeps the same
-// anti-aliased DWM rounding as the expanded widget.
-function applyWindowsChrome(win, { round = false, preventRevealFlash = false } = {})
+// anti-aliased DWM rounding as the expanded widget. On Windows, rounded surfaces
+// also benefit from reveal flash prevention by default.
+function applyWindowsChrome(win, { round = false, preventRevealFlash = round } = {})
 {
   if (process.platform !== 'win32')
   {

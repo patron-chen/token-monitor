@@ -7182,7 +7182,7 @@ function createWindow(boundsOverride, options = {}) {
   mainWindow = win;
   mainWindowChrome = { collapsedFloatingBubble };
   applyMacSpaceBehavior();
-  applyWindowsChrome(win, { round: true, preventRevealFlash: true });
+  applyWindowsChrome(win, { round: true });
   suppressLinuxSystemContextMenu(win);
   onBeforeWindowsReveal(win, () => flushDeferredStatsToMainWindow(win, { immediate: true, allowHidden: true }));
   win.on('maximize', () => {
@@ -7405,7 +7405,7 @@ function createDashboardWindow() {
   const win = new BrowserWindow(windowOptions);
   dashboardWindow = win;
   dashboardWindowReady = false;
-  applyWindowsChrome(win, { round: true, preventRevealFlash: true });
+  applyWindowsChrome(win, { round: true });
   suppressLinuxSystemContextMenu(win);
   syncWindowsBackdrop(win, { enabled: nativeBlurEnabled() });
   attachNativeMaterialVisibility(win, () => nativeMaterialOptions(settings, true));
